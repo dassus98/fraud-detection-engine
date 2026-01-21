@@ -28,10 +28,10 @@ def calculate_economic_cost(y_true, y_pred_proba, threshold, cost_fn = 525, cost
     y_pred = (y_pred_proba >= threshold).astype(int)
     
     # Confusion Matrix Components
-    # fn = Fraud we missed (y_true=1, y_pred=0)
+    # False negatives = Fraud we missed (y_true=1, y_pred=0)
     fn = ((y_true == 1) & (y_pred == 0)).sum()
     
-    # fp = Legitimate users we blocked (y_true=0, y_pred=1)
+    # False positives = Legitimate users we blocked (y_true=0, y_pred=1)
     fp = ((y_true == 0) & (y_pred == 1)).sum()
     
     # Total Cost Calculation
