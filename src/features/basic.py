@@ -15,35 +15,36 @@ class BasicFeatureEngineer:
         # Tier 1: Basic & stateless transformations
         print("Creating Tier 1 Features...")
         
-        # Transforming TransactionAmt
+        # Feature 1: Log of transactions
+        # Normalizing the distribution because most transactions are tiny (e.g. coffee, groceries, monthly subscriptions)
+        # Preventing exploding gradients when training neural networks
         # Adding 1 to avoid log(0) errors
         df['TransactionAmt_Log'] = np.log1p(df['TransactionAmt'])
         
-        # Extracting email domains
+        # Feature 2: Email domains
         # P_emaildomain = Purchaser, R_emaildomain = Recipient
         # Splitting 'gmail.com' -> 'gmail' and 'com'
         for col in ['P_emaildomain', 'R_emaildomain']:
             df[col + '_prefix'] = df[col].astype(str).str.split('.').str[0]
             df[col + '_suffix'] = df[col].astype(str).str.split('.').str[-1]
             
-        # Flagging missing values
+        # Feature 3: Flagging missing values
         # Important for trees to know if a value was explicitly missing
         df['no_identity_info'] = df['id_01'].isnull().astype('int8')
         
         # Tier 2: Aggregations (stateful features)
         print("Creating Tier 2 Features...")
         
-        # Velocity features
+        # Feature 4: Transaction count
         # How many times has this card been seen?
         # card1 = Card issuer identification number (rough proxy for unique card)
         df['card1_count_full'] = df.groupby('card1')['TransactionID'].transform('count')
         
-        # Historical spending balances
+        # Feature 5-7: Historical spending balance, std of transactions, ratio of transaction size
         # What is the average spend for this card?
         df['card1_amt_mean'] = df.groupby('card1')['TransactionAmt'].transform('mean')
         df['card1_amt_std'] = df.groupby('card1')['TransactionAmt'].transform('std')
         
-        # Deviation from mean
         # Is this specific transaction larger than usual for this card?
         df['TransactionAmt_to_mean_card1'] = df['TransactionAmt'] / df['card1_amt_mean']
         
