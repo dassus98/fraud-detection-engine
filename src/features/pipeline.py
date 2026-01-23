@@ -3,6 +3,7 @@ import logging
 from src.features.basic import BasicFeatureEngineer
 from src.features.behavioral import BehavioralFeatureEngineer
 from src.features.velocity import VelocityFeatureEngineer
+from src.features.graph import GraphFeatureEngineer
 
 # Setting up logging
 logging.basicConfig(level = logging.INFO, format = '%(asctime)s - %(levelname)s - %(message)s')
@@ -16,6 +17,7 @@ class FeaturePipeline:
         self.basic_engineer = BasicFeatureEngineer()
         self.behavioral_engineer = BehavioralFeatureEngineer(key_entity = 'card1')
         self.velocity_engineer = VelocityFeatureEngineer(time_col = 'TransactionDT', key_col = 'card1')
+        self.graph_engineer = GraphFeatureEngineer()
 
     def run(self, df):
         """
@@ -40,7 +42,8 @@ class FeaturePipeline:
         logging.info('Tier 4 calculations are complete.')
 
         # Tier 5 calculations
-        # GRAPH CALCULATIONS, ADD LATER
+        df = self.graph_engineer.fit_transform(df)
+        logging.info('Tier 5 calculations are complete.')
 
         logging.info(f'Pipeline complete. Final shale: {df.shape}')
         return df
@@ -55,7 +58,8 @@ if __name__ == '__main__':
         'card1': [1000, 1000, 1000, 2000, 2000],
         'P_emaildomain': ['gmail.com', 'gmail.com', 'yahoo.com', 'hotmail.com', 'hotmail.com'],
         'R_emaildomain': ['yahoo.com', None, None, 'gmail.com', None],
-        'id_01': [-5.0, -5.0, -10.0, None, None]
+        'id_01': [-5.0, -5.0, -10.0, None, None],
+        'DeviceInfo': ['iOS', 'iOS', 'Windows', 'Android', 'Android']
     }
 
     df_test = pd.DataFrame(dummy_data)
@@ -64,4 +68,4 @@ if __name__ == '__main__':
     df_final = pipeline.run(df_test)
 
     print('\nFinal Columns: ', df_final.columns.tolist())
-    print('\nVelocity: \n', df_final[['TransactionDT', 'card1', 'time_since_last_txn']])
+    print('\nGraph Component Size: \n', df_final[['TransactionID', 'uid_graph_component_size']])
