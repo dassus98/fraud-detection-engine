@@ -59,7 +59,7 @@ class FraudModel:
 
         logging.info('Evaluating business impact of the model...')
 
-        y_pred_proba = self.model_predict(X_val)
+        y_pred_proba = self.model.predict(X_val)
         auc = roc_auc_score(y_val, y_pred_proba)
         logging.info(f'Validation AUC: {auc:.4f}')
 
