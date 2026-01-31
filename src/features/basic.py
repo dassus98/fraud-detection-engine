@@ -15,58 +15,83 @@ class BasicFeatureEngineer:
         # Tier 1: Basic & stateless transformations
         print("Creating Tier 1 Features...")
         
-        # Feature 1: Log of transactions
-        # Normalizing the distribution because most transactions are tiny (e.g. coffee, groceries, monthly subscriptions)
-        # Preventing exploding gradients when training neural networks
-        # Adding 1 to avoid log(0) errors
-        df['TransactionAmt_Log'] = np.log1p(df['TransactionAmt'])
-        
-        # Feature 2: Email domains
-        # P_emaildomain = Purchaser, R_emaildomain = Recipient
-        # Splitting 'gmail.com' -> 'gmail' and 'com'
+        # Time Features
+        df['hour'] = (df['TransactionDT'] // 3600) % 24
+        df['day_of_week'] = (df['TransactionDT'] // (3600 * 24)) % 7
+
+        # Email Mapping
+        # Grouping together less common domains to reduce noise
         for col in ['P_emaildomain', 'R_emaildomain']:
-            df[col + '_prefix'] = df[col].astype(str).str.split('.').str[0]
-            df[col + '_suffix'] = df[col].astype(str).str.split('.').str[-1]
+            df[col] = df[col].fillna('unknown')
+            df[f'{col}_suffix'] = df[col].map(lambda x: x.split('.')[-1] if '.' in x else 'unknown')
+        
+        # Amount features
+        df['TransactionAmt_Log'] = np.log1p(df['TransactionAmt'])
+
+        # Retailers usually label prices around .95 - .99 cents for psychological effect
+        # We are going to store this amount to use it to detect fraud (i.e. 499.99 is less likely to be fraudulent than 500.00)
+        # This is largely to see if human behavioural tendencies can be captured by a model
+        df['cents'] = df['TransactionAmt'] - np.floor(df['TransactionAmt'])
+
+        # # Feature 1: Log of transactions
+        # # Normalizing the distribution because most transactions are tiny (e.g. coffee, groceries, monthly subscriptions)
+        # # Preventing exploding gradients when training neural networks
+        # # Adding 1 to avoid log(0) errors
+        # df['TransactionAmt_Log'] = np.log1p(df['TransactionAmt'])
+        
+        # # Feature 2: Email domains
+        # # P_emaildomain = Purchaser, R_emaildomain = Recipient
+        # # Splitting 'gmail.com' -> 'gmail' and 'com'
+        # for col in ['P_emaildomain', 'R_emaildomain']:
+        #     df[col + '_prefix'] = df[col].astype(str).str.split('.').str[0]
+        #     df[col + '_suffix'] = df[col].astype(str).str.split('.').str[-1]
             
-        # Feature 3: Flagging missing values
-        # Important for trees to know if a value was explicitly missing
-        df['no_identity_info'] = df['id_01'].isnull().astype('int8')
+        # # Feature 3: Flagging missing values
+        # # Important for trees to know if a value was explicitly missing
+        # df['no_identity_info'] = df['id_01'].isnull().astype('int8')
         
-        # Tier 2: Aggregations (stateful features)
-        print("Creating Tier 2 Features...")
+        # # Tier 2: Aggregations (stateful features)
+        # print("Creating Tier 2 Features...")
         
-        # Feature 4: Transaction count
-        # How many times has this card been seen?
-        # card1 = Card issuer identification number (rough proxy for unique card)
-        df['card1_count_full'] = df.groupby('card1')['TransactionID'].transform('count')
+        # # Feature 4: Transaction count
+        # # How many times has this card been seen?
+        # # card1 = Card issuer identification number (rough proxy for unique card)
+        # df['card1_count_full'] = df.groupby('card1')['TransactionID'].transform('count')
         
-        # Feature 5-7: Historical spending balance, std of transactions, ratio of transaction size
-        # What is the average spend for this card?
-        df['card1_amt_mean'] = df.groupby('card1')['TransactionAmt'].transform('mean')
-        df['card1_amt_std'] = df.groupby('card1')['TransactionAmt'].transform('std')
+        # # Feature 5-7: Historical spending balance, std of transactions, ratio of transaction size
+        # # What is the average spend for this card?
+        # df['card1_amt_mean'] = df.groupby('card1')['TransactionAmt'].transform('mean')
+        # df['card1_amt_std'] = df.groupby('card1')['TransactionAmt'].transform('std')
         
-        # Is this specific transaction larger than usual for this card?
-        df['TransactionAmt_to_mean_card1'] = df['TransactionAmt'] / df['card1_amt_mean']
+        # # Is this specific transaction larger than usual for this card?
+        # df['TransactionAmt_to_mean_card1'] = df['TransactionAmt'] / df['card1_amt_mean']
         
         return df
 
 if __name__ == "__main__":
-    # Test block to verify it works
-    # Create a dummy dataframe
-    data = {
-        'TransactionID': [1, 2, 3, 4],
-        'TransactionAmt': [100.0, 50.0, 100.0, 5000.0],
-        'card1': [1000, 1000, 1000, 1000],
-        'P_emaildomain': ['gmail.com', 'yahoo.com', 'gmail.com', None],
-        'R_emaildomain': [None, None, 'hotmail.com', 'gmail.com'],
-        'id_01': [-5.0, -5.0, None, -10.0]
-    }
-    df_test = pd.DataFrame(data)
     
+    df_test = pd.read_csv('data/raw/train_transaction.csv', nrows = 5000)
     engineer = BasicFeatureEngineer()
-    df_transformed = engineer.fit_transform(df_test)
+    df_processed = engineer.fit_transform(df_test)
+    print('New Columns: ', df_processed.columns[-5:])
+    print(df_processed[['hour', 'cents', 'TransactionAmt_Log']].head())
     
-    print("\nTransformed Columns:")
-    print(df_transformed.columns.tolist())
-    print("\nExample Feature (TransactionAmt_to_mean_card1):")
-    print(df_transformed[['TransactionAmt', 'card1_amt_mean', 'TransactionAmt_to_mean_card1']])
+    # # Test block to verify it works
+    # # Create a dummy dataframe
+    # data = {
+    #     'TransactionID': [1, 2, 3, 4],
+    #     'TransactionAmt': [100.0, 50.0, 100.0, 5000.0],
+    #     'card1': [1000, 1000, 1000, 1000],
+    #     'P_emaildomain': ['gmail.com', 'yahoo.com', 'gmail.com', None],
+    #     'R_emaildomain': [None, None, 'hotmail.com', 'gmail.com'],
+    #     'id_01': [-5.0, -5.0, None, -10.0]
+    # }
+    # df_test = pd.DataFrame(data)
+    
+    # engineer = BasicFeatureEngineer()
+    # df_transformed = engineer.fit_transform(df_test)
+    
+    # print("\nTransformed Columns:")
+    # print(df_transformed.columns.tolist())
+    # print("\nExample Feature (TransactionAmt_to_mean_card1):")
+    # print(df_transformed[['TransactionAmt', 'card1_amt_mean', 'TransactionAmt_to_mean_card1']])
