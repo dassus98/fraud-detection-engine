@@ -20,7 +20,8 @@ class VFeatureCleaner:
         """
         v_cols = [col for col in df.columns if col.startswith('V')]
 
-        corr_matrix = df.corr().abs()
+        print(f'Exploring redundant V features...')
+        corr_matrix = df[v_cols].corr().abs()
 
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
         self.drop_cols = [col for col in upper.columns if any(upper[col] > self.threshold)]
