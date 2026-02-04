@@ -5,7 +5,7 @@ import gc
 import os
 import lightgbm as lgb
 from src.features.pipeline import FeaturePipeline
-from src.pipeline.pipeline import FraudPipeline
+from src.pipeline import FraudPipeline
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
 
 RAW_DATA_PATH = 'data/raw/train_transaction.csv'
