@@ -1,4 +1,5 @@
 {
+    "best_score": 0.909237135335525,
     "num_leaves": 72,
     "max_depth": 13,
     "min_child_samples": 24,
