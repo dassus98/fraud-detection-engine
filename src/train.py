@@ -45,13 +45,28 @@ def train_production_model():
 
     print('TRAINING LGM MODEL')
 
-    clf = lgb.LGBMClassifier(
-        n_estimators=2000,
-        learning_rate=0.02,
-        num_leaves=30,
-        max_depth=10,
-        subsample=0.75,
-        colsample_bytree=0.75,
+    # clf = lgb.LGBMClassifier(
+    #     n_estimators=2000,
+    #     learning_rate=0.02,
+    #     num_leaves=30,
+    #     max_depth=10,
+    #     subsample=0.75,
+    #     colsample_bytree=0.75,
+    #     metric='auc',
+    #     n_jobs=-1,
+    #     random_state=42
+    # )
+
+    clf_optimized = lgb.LGBMClassifier(
+        n_estimators=899,
+        learning_rate=0.6268098768191473,
+        num_leaves=100,
+        max_depth=13,
+        min_child_samples=84,
+        subsample=0.8811005080325753,
+        colsample_bytree=0.8440544103190658,
+        reg_alpha=2.5743280324430304,
+        reg_lambda=5.714691332865649,
         metric='auc',
         n_jobs=-1,
         random_state=42
@@ -63,7 +78,7 @@ def train_production_model():
             X_train[col] = X_train[col].astype('category')
             X_val[col] = X_val[col].astype('category')
         
-    clf.fit(
+    clf_optimized.fit(
         X_train, y_train,
         eval_set = [(X_val, y_val)],
         callbacks = [
@@ -73,7 +88,7 @@ def train_production_model():
     )
 
     print('\n--- RESULTS ---')
-    val_preds = clf.predict_proba(X_val)[:, 1]
+    val_preds = clf_optimized.predict_proba(X_val)[:, 1]
     auc_score = roc_auc_score(y_val, val_preds)
     precision, recall, _ = precision_recall_curve(y_val, val_preds)
     pr_auc = auc(recall, precision)
@@ -83,7 +98,7 @@ def train_production_model():
 
     print('SAVING MODEL')
     os.makedirs('models', exist_ok=True)
-    joblib.dump(clf, MODEL_SAVE_PATH)
+    joblib.dump(clf_optimized, MODEL_SAVE_PATH)
     joblib.dump(pipeline, PIPELINE_SAVE_PATH)
     print(f'MODEL AND PIPELINE SUCCESSFULLY SAVED')
 
