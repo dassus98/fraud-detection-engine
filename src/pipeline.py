@@ -1,69 +1,85 @@
 import pandas as pd
+import numpy as np
 import gc
+from sklearn.base import BaseEstimator, TransformerMixin
+from src.config import SELECTED_FEATURES, DROP_COLS
 from src.features.v_features import VFeatureCleaner
 
-class FraudPipeline:
-    def __init__(self, selected_features = None, v_threshold = 0.90):
-        """
-        Docstring for __init__
-        
-        :param self: Description
-        :param selected_features: Description
-        :param v_threshold: Description
-        """
-
-        self.manual_selection = selected_features or [
-            'TransactionAmt', 'ProductCD', 'card1', 'card2', 'card3', 'card4', 'card5', 'card6',
-            'addr1', 'addr2', 'dist1', 'dist2', 'P_emaildomain', 'R_emaildomain',
-            'C1', 'C2', 'C5', 'C8', 'C9', 'C12', # Choosing Cs with >0.30 correlation with Fraud
-            'D1', 'D3', 'D4', 'D5', 'D8', 'D10', 'D11', 'D13', 'D14', 'D15', # Choosing non-collinear D variables
-            'M1', 'M4', 'M5', 'M6', 'M7'
+class FraudPipeline(BaseEstimator, TransformerMixin):
+    """
+    Production pipeline intended to compelete four tasks:
+    - Cleaning up the V variables (done here to prevent data leakage)
+    - Feature selection
+    - Categorical encoding of object variables
+    - Null value handling
+    """
+    def __init__(self):
+        self.v_cleaner = VFeatureCleaner()
+        self.cat_encoders = {}
+        self.string_cols = [
+            'ProductCD', 'card4', 'card6', 
+            'P_emaildomain', 'R_emaildomain',
+            'M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7', 'M8', 'M9'
         ]
 
-        self.v_cleaner = VFeatureCleaner(threshold=v_threshold)
-
-    def fit_transform(self, df):
+    def fit(self, X, y=None):
         """
-        Cleans V variables.
+        Learns from training data.
         """
 
         print('--- Fitting Pipeline ---')
 
-        cols_to_keep = [col for col in self.manual_selection if col in df.columns]
-        # cols_to_keep = self.manual_selection + v_cols
-        X = df[cols_to_keep].copy()
+        v_cols = [col for col in X.columns if col.startswith('V')]
+        if v_cols:
+            print(f'Optimizing {len(v_cols)} V variables.')
+            self.v_cleaner.fit(X[v_cols])
 
-        print('Optimizing V features...')
-        self.v_cleaner.fit(X)
-        X = self.v_cleaner.transform(X)
+        print('Encoding categorical variables.')
+        self.cat_cols = [col for col in self.string_cols if col in X.columns and col in SELECTED_FEATURES]
+        for col in self.cat_cols:
+            self.cat_encoders[col] = {k: i for i, k in enumerate(X[col].astype(str).value_counts().index)}
 
-        print('Pipeline complete.')
-        return X
-    
-    def transform(self, df):
+        return self
+
+    def transform(self, X):
         """
-        Docstring for transform
-        
-        :param self: Description
-        :param df: Description
+        Transforming the data.
         """
-        print("--- Pipeline: Transform ---")
+        X = X.copy()
         
-        # v_cols = [c for c in df.columns if c.startswith('V')]
-        cols_to_keep = [col for col in self.manual_selection if col in df.columns]
-        # cols_to_keep = [c for c in cols_to_keep if c in df.columns]
-        
-        X = df[cols_to_keep].copy()
+        # Drop features learned as redundant during fit.
         X = self.v_cleaner.transform(X)
+        remaining_v_cols = [col for col in X.columns if col.startswith('V')]
+
+        # Feature selection
+        base_features_present = [col for col in SELECTED_FEATURES if col in X.columns]
+        final_cols = base_features_present + remaining_v_cols
+        X_final = X[final_cols].copy()
+
+        # Categorical encoding + handling null values
+        for col, mapping in self.cat_encoders.items():
+            if col in X_final.columns:
+                # Change to int
+                X_final[col] = X_final[col].astype(str).map(mapping).fillna(-1).astype(int)
+                # Change to category for LightGBM to train (so it doesn't confuse it for numeric values)
+                X_final[col] = X_final[col].astype('category')
         
-        return X
+        for col in SELECTED_FEATURES:
+            if col not in X_final.columns:
+                X_final[col] = np.nan
+
+        return X_final
     
 if __name__ == '__main__':
     print('Loading data to test pipeline...')
-    df_test = pd.read_csv('data/raw/train_transaction.csv')
-    test_features = ['ProductCD', 'card1', 'C2', 'D3', 'M4', 'V5', 'V6', 'V7', 'V8']
-    test_pipeline = FraudPipeline(selected_features=test_features)
-
-    df_processed = test_pipeline.fit_transform(df_test)
-
-    print('\nRemaining columns: ', df_processed.columns.tolist())
+    try:
+        df_test = pd.read_csv('data/raw/train_transaction.csv', nrows=1000)
+        test_pipeline = FraudPipeline()
+        test_pipeline.fit(df_test)
+        X_processed = test_pipeline.transform(df_test)
+        print(f'Input shape: {df_test.shape}')
+        print(f'Output shape: {X_processed.shape}')
+        print(f'Remaining columns: {X_processed.columns.tolist()}')
+    except FileNotFoundError:
+        print('File not found - check training data file path.')
+    pass

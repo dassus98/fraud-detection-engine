@@ -3,104 +3,76 @@ import joblib
 import logging
 import gc
 import os
-import lightgbm as lgb
-from src.features.pipeline import FeaturePipeline
+from sklearn.metrics import roc_auc_score, average_precision_score
+
+from src.config import DATA_PATH, MODEL_SAVE_PATH, PIPELINE_SAVE_PATH
 from src.pipeline import FraudPipeline
-from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
+from src.models.fraud_model import FraudModel
 
-RAW_DATA_PATH = 'data/raw/train_transaction.csv'
-MODEL_SAVE_PATH = 'models/fraud_model_v1.pkl'
-PIPELINE_SAVE_PATH = 'models/pipeline_v1.pkl'
-
-SELECTED_FEATURES = [
-    'TransactionAmt', 'ProductCD', 'card1', 'card2', 'card3', 'card4', 'card5', 'card6',
-    'addr1', 'addr2', 'dist1', 'dist2', 'P_emaildomain', 'R_emaildomain',
-    'C1', 'C2', 'C5', 'C8', 'C9', 'C12', # Choosing Cs with >0.30 correlation with Fraud
-    'D1', 'D3', 'D4', 'D5', 'D8', 'D10', 'D11', 'D13', 'D14', 'D15', # Choosing non-collinear D variables
-    'M1', 'M4', 'M5', 'M6', 'M7'
-]
+# Setting up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 def train_production_model():
-    print('--- STARTING TRAIN ---')
+    logger.info('--- Starting Production Training Run ---')
+    if not os.path.exists(DATA_PATH):
+        logger.error(f'Data path not found: {DATA_PATH}')
+        return
+    
+    logger.info(f'Loading data...')
+    df = pd.read_csv(DATA_PATH)
 
-    path = RAW_DATA_PATH if os.path.exists(RAW_DATA_PATH) else print('Check raw data path.')
-    print(f'RETRIEVING DATA FROM {path}...')
-    df = pd.read_csv(path)
+    logger.info('Sorting data by temporal split...')
+    
+    df = df.sort_values('TransactionDT').reset_index(drop=True)
+    split_idx = int(len(df) * 0.8)
 
-    X = df.drop(columns = ['isFraud', 'TransactionID'])
-    y = df['isFraud']
+    train_df = df.iloc[:split_idx].copy()
+    val_df = df.iloc[split_idx:].copy()
+    y_train = train_df['isFraud']
+    y_val = val_df['isFraud']
 
+    # Cleaning memory
     del df
     gc.collect()
 
-    print(f'RUNNING PIPELINE WITH {len(SELECTED_FEATURES)} FEATURES')
-    pipeline = FraudPipeline(selected_features=SELECTED_FEATURES, v_threshold=0.90)
+    logger.info(f'Train set: {train_df.shape}')
+    logger.info(f'Val set: {val_df.shape}')
+    logger.info(f'y train set: {y_train.shape}')
+    logger.info(f'y val set: {y_val.shape}')
 
-    X_processed = pipeline.fit_transform(X)
-    print(f'Final Shape: {X_processed.shape}')
+    logger.info('Fitting data on Train dataset...')
+    
+    pipeline = FraudPipeline()
+    X_train_processed = pipeline.fit_transform(train_df)
+    X_val_processed = pipeline.transform(val_df)
 
-    split_idx = int(len(X_processed) * 0.80)
-    X_train, X_val = X_processed.iloc[:split_idx], X_processed.iloc[split_idx:]
-    y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
-
-    print('TRAINING LGM MODEL')
-
-    # clf = lgb.LGBMClassifier(
-    #     n_estimators=2000,
-    #     learning_rate=0.02,
-    #     num_leaves=30,
-    #     max_depth=10,
-    #     subsample=0.75,
-    #     colsample_bytree=0.75,
-    #     metric='auc',
-    #     n_jobs=-1,
-    #     random_state=42
-    # )
-
-    clf_optimized = lgb.LGBMClassifier(
-        n_estimators=899,
-        learning_rate=0.6268098768191473,
-        num_leaves=100,
-        max_depth=13,
-        min_child_samples=84,
-        subsample=0.8811005080325753,
-        colsample_bytree=0.8440544103190658,
-        reg_alpha=2.5743280324430304,
-        reg_lambda=5.714691332865649,
-        metric='auc',
-        n_jobs=-1,
-        random_state=42
-    )
-
-    cat_cols = X_processed.select_dtypes(include=['object', 'category']).columns.tolist()
-    if cat_cols:
-        for col in cat_cols:
-            X_train[col] = X_train[col].astype('category')
-            X_val[col] = X_val[col].astype('category')
-        
-    clf_optimized.fit(
-        X_train, y_train,
-        eval_set = [(X_val, y_val)],
-        callbacks = [
-            lgb.early_stopping(100),
-            lgb.log_evaluation(100)
-        ]
-    )
-
-    print('\n--- RESULTS ---')
-    val_preds = clf_optimized.predict_proba(X_val)[:, 1]
-    auc_score = roc_auc_score(y_val, val_preds)
-    precision, recall, _ = precision_recall_curve(y_val, val_preds)
-    pr_auc = auc(recall, precision)
-
-    print(f'ROC-AUC: {auc_score:.4f}')
-    print(f'PR AUC: {pr_auc:.4f}')
-
-    print('SAVING MODEL')
-    os.makedirs('models', exist_ok=True)
-    joblib.dump(clf_optimized, MODEL_SAVE_PATH)
+    # Saving pipeline
+    os.makedirs(os.path.dirname(PIPELINE_SAVE_PATH), exist_ok=True)
     joblib.dump(pipeline, PIPELINE_SAVE_PATH)
-    print(f'MODEL AND PIPELINE SUCCESSFULLY SAVED')
+    logger.info(f'Pipeline saved to: {PIPELINE_SAVE_PATH}')
+
+    # Training model
+    logger.info('Training LightGBM model with optimized params...')
+    model = FraudModel()
+    model.train(X_train_processed, y_train, X_val_processed, y_val)
+
+    # Evaluate model
+    val_preds = model.predict(X_val_processed)
+    roc_auc = roc_auc_score(y_val, val_preds)
+    pr_auc = average_precision_score(y_val, val_preds)
+
+    logger.info('--- Final Results ---')
+    logger.info(f'ROC-AUC: {roc_auc:.4f}')
+    logger.info(f'PR-AUC: {pr_auc:.4f}')
+
+    # Saving model
+    os.makedirs(os.path.dirname(MODEL_SAVE_PATH), exist_ok=True)
+    model.save(MODEL_SAVE_PATH)
+    logger.info(f'Model saved to {MODEL_SAVE_PATH}')
 
 if __name__ == '__main__':
     train_production_model()

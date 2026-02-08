@@ -3,7 +3,8 @@ import numpy as np
 
 class VFeatureCleaner:
     """
-    Docstring for VFeatureCleaner
+    Cleans up the V variables. There are 339 V variables with a lot of high collinearity.
+    This removes any with a collinearity > 0.90.
     """
 
     def __init__(self, threshold=0.90):
@@ -13,10 +14,7 @@ class VFeatureCleaner:
 
     def fit(self, df):
         """
-        Docstring for fit
-        
-        :param self: Description
-        :param df: Description
+        Learns which columns to drop.
         """
         v_cols = [col for col in df.columns if col.startswith('V')]
 
@@ -28,13 +26,11 @@ class VFeatureCleaner:
         self.top_features = [col for col in v_cols if col not in self.drop_cols]
 
         print(f'{len(self.drop_cols)} redundant features.')
+        return self
 
     def transform(self, df):
         """
-        Docstring for transform
-        
-        :param self: Description
-        :param df: Description
+        Drop features learned in fit function.
         """
 
         cols_to_remove = [col for col in self.drop_cols if col in df.columns]
@@ -46,6 +42,11 @@ class VFeatureCleaner:
         return df
     
 if __name__ == '__main__':
-    df_test = pd.read_csv('../data/raw/train_transaction.csv')
-    cleaner = VFeatureCleaner(threshold=0.90)
-    cleaner.fit(df_test)
+    try:
+        df_test = pd.read_csv('../data/raw/train_transaction.csv')
+        cleaner = VFeatureCleaner(threshold=0.90)
+        cleaner.fit(df_test)
+        df_transformed = cleaner.transform(df_test)
+        print(f'Original shape: {df_test.shape}, new shape: {df_transformed.shape}')
+    except:
+        pass
