@@ -15,10 +15,16 @@ from optuna.integration import LightGBMPruningCallback
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Defining global var at modular level for safety
+global_df = None
+
 def objective(trial):
     """
     Optuna objective function. Optimizes LightGBM hyperparameters.
     """
+
+    # Declaring usage of global var
+    global global_df
 
     param = {
         'objective': 'binary',
@@ -35,7 +41,6 @@ def objective(trial):
         
         # Learning speed
         'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1, log=True),
-        'n_estimators': trial.suggest_int('n_estimators', 500, 3000),
         
         # Regularization
         'subsample': trial.suggest_float('subsample', 0.5, 1.0),
@@ -44,14 +49,17 @@ def objective(trial):
         'reg_lambda': trial.suggest_float('reg_lambda', 0.0, 10.0),
     }
 
-    if 'global_df' not in globals():
-        global global_df
+    n_estimators = trial.suggest_int('n_estimators', 500, 3000)
+
+    if global_df is None:
         logger.info('Loading data for tuning...')
-        global_df = pd.read_csv(DATA_PATH)
-        global_df = reduce_mem_usage(global_df)
+        df_temp = pd.read_csv(DATA_PATH)
+        df_temp = reduce_mem_usage(df_temp)
 
         logger.info('Sorting by time for validation split...')
-        global_df = global_df.sort_values('TransactionDT').reset_index(drop=True)
+        global_df = df_temp.sort_values('TransactionDT').reset_index(drop=True)
+        del df_temp
+        gc.collect()
 
     split_idx = int(len(global_df) * 0.8)
     train_df = global_df.iloc[:split_idx]
@@ -69,8 +77,12 @@ def objective(trial):
     model = lgb.train(
         param,
         train_data,
+        num_boost_round=n_estimators,
         valid_sets = [val_data],
-        callbacks = [lgb.early_stopping(stopping_rounds=50), lgb.log_evaluation(0)]
+        callbacks = [
+            lgb.early_stopping(stopping_rounds=50), 
+            lgb.log_evaluation(period=0)
+            ]
     )
 
     preds = model.predict(X_val)
