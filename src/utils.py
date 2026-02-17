@@ -30,7 +30,6 @@ def reduce_mem_usage(df, verbose=True):
             
             # Float Handling (STOP AT FLOAT32)
             else:
-                # WE REMOVED THE FLOAT16 CHECK HERE
                 if c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
                     df[col] = df[col].astype(np.float32)
                 else:
