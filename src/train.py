@@ -8,6 +8,7 @@ from sklearn.metrics import roc_auc_score, average_precision_score
 from src.config import DATA_PATH, MODEL_SAVE_PATH, PIPELINE_SAVE_PATH
 from src.pipeline import FraudPipeline
 from src.models.fraud_model import FraudModel
+from src.utils import reduce_mem_usage
 
 # Setting up logging
 logging.basicConfig(
@@ -24,6 +25,7 @@ def train_production_model():
     
     logger.info(f'Loading data...')
     df = pd.read_csv(DATA_PATH)
+    df = reduce_mem_usage(df)
 
     logger.info('Sorting data by temporal split...')
     

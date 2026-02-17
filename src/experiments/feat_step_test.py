@@ -30,10 +30,6 @@ def get_feature_groups():
 def train_and_evaluate(df, features, stage_name):
     """
     Docstring for train_and_evaluate
-    
-    :param df: Description
-    :param features: Description
-    :param stage_name: Description
     """
 
     print(f'\n--- Training Stage: {stage_name} ---')
