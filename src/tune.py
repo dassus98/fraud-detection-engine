@@ -3,28 +3,21 @@ import numpy as np
 import optuna
 import lightgbm as lgb
 import json
+import logging
 import os
 import gc
 from src.pipeline import FraudPipeline
 from sklearn.metrics import roc_auc_score
+from src.config import SELECTED_FEATURES, DATA_PATH, PARAMS_PATH
+from src.utils import reduce_mem_usage
 from optuna.integration import LightGBMPruningCallback
 
-RAW_DATA_PATH = 'data/raw/train_transaction.csv'
-OUTPUT_PATH = 'models/best_params.json'
-
-SELECTED_FEATURES = [
-    'TransactionAmt', 'ProductCD', 'card1', 'card2', 'card3', 'card4', 'card5', 'card6',
-    'addr1', 'addr2', 'dist1', 'dist2', 'P_emaildomain', 'R_emaildomain',
-    'C1', 'C2', 'C5', 'C8', 'C9', 'C12', # Choosing Cs with >0.30 correlation with Fraud
-    'D1', 'D3', 'D4', 'D5', 'D8', 'D10', 'D11', 'D13', 'D14', 'D15', # Choosing non-collinear D variables
-    'M1', 'M4', 'M5', 'M6', 'M7'
-]
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 def objective(trial):
     """
-    Docstring for objective
-    
-    :param trial: Description
+    Optuna objective function. Optimizes LightGBM hyperparameters.
     """
 
     param = {
@@ -51,15 +44,33 @@ def objective(trial):
         'reg_lambda': trial.suggest_float('reg_lambda', 0.0, 10.0),
     }
 
-    dtrain = lgb.Dataset(X_train, label = y_train)
-    dval = lgb.Dataset(X_val, label = y_val, reference = dtrain)
-    pruning_callback = LightGBMPruningCallback(trial, 'auc')
+    if 'global_df' not in globals():
+        global global_df
+        logger.info('Loading data for tuning...')
+        global_df = pd.read_csv(DATA_PATH)
+        global_df = reduce_mem_usage(global_df)
+
+        logger.info('Sorting by time for validation split...')
+        global_df = global_df.sort_values('TransactionDT').reset_index(drop=True)
+
+    split_idx = int(len(global_df) * 0.8)
+    train_df = global_df.iloc[:split_idx]
+    val_df = global_df.iloc[split_idx:]
+
+    pipeline = FraudPipeline()
+    X_train = pipeline.fit_transform(train_df)
+    X_val = pipeline.transform(val_df)
+    y_train = train_df['isFraud']
+    y_val = val_df['isFraud']
+
+    train_data = lgb.Dataset(X_train, label=y_train)
+    val_data = lgb.Dataset(X_val, label=y_val, reference=train_data)
 
     model = lgb.train(
         param,
-        dtrain,
-        valid_sets = [dval],
-        callbacks = [pruning_callback]
+        train_data,
+        valid_sets = [val_data],
+        callbacks = [lgb.early_stopping(stopping_rounds=50), lgb.log_evaluation(0)]
     )
 
     preds = model.predict(X_val)
@@ -67,43 +78,21 @@ def objective(trial):
 
     return auc
 
-if __name__ == '__main__':
-    print('--- STARTING MODEL OPTIMIZATION ---')
-
-    path = RAW_DATA_PATH if os.path.exists(RAW_DATA_PATH) else print('Raw path error.')
-
-    df = pd.read_csv(path)
-
-    X = df.drop(columns = ['isFraud', 'TransactionID'])
-    y = df['isFraud']
-    del df
-    gc.collect()
-
-    print('Running pipeline...')
-    pipeline = FraudPipeline(selected_features=SELECTED_FEATURES, v_threshold=0.90)
-    X_processed = pipeline.fit_transform(X)
-
-    cat_cols = X_processed.select_dtypes(include=['object', 'category']).columns.tolist()
-    for col in cat_cols:
-        X_processed[col] = X_processed[col].astype('category')
-
-    split_idx = int(len(X_processed) * 0.8)
-    X_train, X_val = X_processed.iloc[:split_idx], X_processed.iloc[split_idx:]
-    y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
-
-    print(f'Training shape: {X_train.shape}')
+def run_tuning():
+    logger.info('--- Starting Hyperparameter Tuning ---')
 
     study = optuna.create_study(direction='maximize')
     study.optimize(objective, n_trials=50)
 
-    print('\n--- OPTIMIZATION COMPLETE ---')
-    print(f'Best AUC: {study.best_value:.4f}')
-    print('Best params:')
-    for key, value in study.best_params.items():
-        print(f'{key}: {value}')
+    logger.info('--- Tuning Complete ---')
+    logger.info(f'Best AUC: {study.best_value}')
+    logger.info(f'Best Params: {study.best_params}')
 
-    os.makedirs('models', exist_ok=True)
-    with open(OUTPUT_PATH, 'w') as f:
+    # Saving best params
+    os.makedirs(os.path.dirname(PARAMS_PATH), exist_ok=True)
+    with open(PARAMS_PATH, 'w') as f:
         json.dump(study.best_params, f, indent=4)
-    
-    print(f'Best parameters saved to {OUTPUT_PATH}')
+    logger.info(f'Saved best params to: {PARAMS_PATH}')
+
+if __name__ == '__main__':
+    run_tuning()
