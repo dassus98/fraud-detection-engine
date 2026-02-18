@@ -23,15 +23,18 @@ def train_production_model():
         logger.error(f'Data path not found: {DATA_PATH}')
         return
     
+    # Loading data, reducing memory usage
     logger.info(f'Loading data...')
     df = pd.read_csv(DATA_PATH)
     df = reduce_mem_usage(df)
 
     logger.info('Sorting data by temporal split...')
     
+    # Sorting by time
     df = df.sort_values('TransactionDT').reset_index(drop=True)
     split_idx = int(len(df) * 0.8)
 
+    # Splitting datasets
     train_df = df.iloc[:split_idx].copy()
     val_df = df.iloc[split_idx:].copy()
     y_train = train_df['isFraud']
