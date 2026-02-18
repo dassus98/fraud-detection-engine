@@ -1,90 +1,108 @@
 import pandas as pd
 import joblib
+import uvicorn
+import os
 import logging
 import traceback
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from src.features.pipeline import FeaturePipeline
+
+from src.config import MODEL_SAVE_PATH, PIPELINE_SAVE_PATH
+from src.models.fraud_model import FraudModel
 
 # Initializing API
-app = FastAPI(title = 'Fraud Detection Engine', version = '1.0.0')
+app = FastAPI(
+    title = 'Fraud Detection Engine',
+    description='Real-time fraud detection API using LightGBM',
+    version = '1.0.0')
+
 logging.basicConfig(level = logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Loading artifacts
-try:
-    model = joblib.load('models/lgbm_model_v1.pkl')
-    pipeline = FeaturePipeline()
-    logging.info('Model and Pipeline loaded succesfully.')
-except Exception as e:
-    logging.error(f'Failed to load artifacts. {e}')
-    model = None
-    pipeline = None
+artifacts = {
+    'model': None,
+    'pipeline': None
+}
 
-# Defining input schema
 class TransactionRequest(BaseModel):
-    TransactionID: int
-    TransactionDT: int
+    """
+    Defining only a few key fields for documentation.
+    """
+    TransactionID: int = None
     TransactionAmt: float
+    ProductCD: str
     card1: int
-    P_emaildomain: str = None
-    R_emaildomain: str = None
-    DeviceInfo: str = None
-    id_01: float = None
+    card2: float = None
 
-# Defining endpoints
+    class Config:
+        # Permit extra fields to be added without validation errors
+        extra = 'allow'
+
+@app.on.event('startup')
+def load_artifacts():
+    """
+    Loading model and pipeline on startup to prevent re-loading for every request.
+    """
+
+    logger.info('Loading artifacts...')
+
+    try:
+        if not os.path.exists(MODEL_SAVE_PATH) or not os.path.exists(PIPELINE_SAVE_PATH):
+            logger.error("Artifacts not found, paths don't exist.")
+            return
+        
+        artifacts['pipeline'] = joblib.load(PIPELINE_SAVE_PATH)
+        artifacts['model'] = joblib.load(MODEL_SAVE_PATH)
+
+        logger.info('--- Artifacts loaded successfully ---')
+
+    except Exception as e:
+        logger.error(f'ERROR: Failed to load artifacts. {e}')
+        logger.error(traceback.format_exc())
+
 @app.get('/health')
 def health_check():
-    """Checks to see if server is alive"""
-    if model is None:
-        raise HTTPException(status_code = 503, detail = 'Model load failed.')
-    return {'status': 'healthy', 'model_version': 'v1'}
+    """
+    Check to see if server is up and artifacts are ready.
+    """
+    if artifacts['model'] is None or artifacts['pipeline'] is None:
+        raise HTTPException(status_code=503, detail='Artifacts not loaded.')
+    return {'status': 'healthy', 'model_version':'v1'}
 
 @app.post('/predict')
 def predict(txn: TransactionRequest):
     """
-    Receives JSON file, converts to df, runs pipeline.
+    Receives JSON file, runs pipeline, returns fraud score & decision.
     """
-    if not model:
-        raise HTTPException(status_code = 503, detail = 'Model load failed')
-    
+    if not artifacts['model'] or not artifacts['pipeline']:
+        raise HTTPException(status_code=503, detail='Artifacts not loaded')
     try:
-        # Convert JSON to DataFrame
-        data_dict = {k: [v] for k, v in txn.dict().items()}
-        df = pd.DataFrame(data_dict)
+        # Convert JSON to df
+        input_data = txn.dict()
+        df = pd.DataFrame([input_data])
 
         # Run pipeline
-        df_processed = pipeline.run(df)
+        df_processed = artifacts['pipeline'].transform(df)
 
-        try:
-            model_features = model.model.feature_name()
-            logging.info(f"Model expects {len(model_features)} features.")
-            
-            # Add missing columns with 0
-            for col in model_features:
-                if col not in df_processed.columns:
-                    df_processed[col] = 0
-            
-            # Reorder exactly to match model
-            X_input = df_processed[model_features]
-        except Exception as e:
-            logging.warning(f'Could not retrieve feature names from model ({e}). Fallback to numerics.')
-            X_input = df_processed.select_dtypes(include=['number', 'bool'])
-        
-        prob = model.predict(X_input)[0]
-        decision = model.predict_decision(X_input)[0]
+        # Predict probs and decision
+        prob = artifacts['model'].predict(df_processed)[0]
+        decision = artifacts['model'].predict_decision(df_processed)[0]
+        threshold = getattr(artifacts['model'], 'optimal_threshold', 0.5)
 
         return {
-            'transaction_id': txn.TransactionID,
+            'transaction_id': input_data.get('TransactionID', 'N/A'),
             'fraud_probability': float(prob),
             'decision': "BLOCK" if decision == 1 else 'ALLOW',
-            'decision_reason': 'High Risk (> Threshold)' if decision == 1 else 'Low Risk'
+            'decision_reason': 'High Risk (> Threshold)' if decision == 1 else 'Low Risk',
+            'threshold_used': float(threshold)
         }
+    
     except Exception as e:
-        logging.error(f'Prediction Error: {e}')
-        logging.error(traceback.format_exc())
-        raise HTTPException(status_code = 500, detail = str(e))
+        logger.error(f'Prediction Error: {e}')
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
     
 if __name__ == '__main__':
-    import uvicorn
     uvicorn.run(app, host = '0.0.0.0', port = 8000)
     
