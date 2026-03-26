@@ -3,7 +3,7 @@ import numpy as np
 import logging
 import os
 # Adjust this import based on where you put the class in Sprint 3
-from src.features.graph import GraphFeatureEngineer 
+from features.defunct.graph import GraphFeatureEngineer 
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 

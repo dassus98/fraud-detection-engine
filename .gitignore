@@ -16,3 +16,6 @@ data/
 
 # OS
 .DS_Store
+
+# Other files
+src/features/defunct
