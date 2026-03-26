@@ -9,7 +9,7 @@ def reduce_mem_usage(df, verbose=True):
     Reduces memory usage by column.
     SAFE VERSION: Skips float16 to prevent aggregation errors.
     """
-    numerics = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64']
+    numerics = ['int16', 'int32', 'int64', 'float32', 'float64']
     start_mem = df.memory_usage().sum() / 1024**2    
     
     for col in df.columns:

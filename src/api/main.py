@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from src.config import MODEL_SAVE_PATH, PIPELINE_SAVE_PATH
 from src.models.fraud_model import FraudModel
+from src.pipeline import FraudPipeline
 
 # Initializing API
 app = FastAPI(

@@ -8,7 +8,7 @@ import os
 import gc
 from src.pipeline import FraudPipeline
 from sklearn.metrics import roc_auc_score
-from src.config import SELECTED_FEATURES, DATA_PATH, PARAMS_PATH
+from src.config import DATA_PATH, PARAMS_PATH
 from src.utils import reduce_mem_usage
 from optuna.integration import LightGBMPruningCallback
 

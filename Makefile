@@ -10,7 +10,7 @@ setup:
 
 # Training: Run the full training pipeline
 train:
-	. $(VENV)/bin/activate && $(PYTHON) -m src.pipeline.train_pipeline
+	. $(VENV)/bin/activate && $(PYTHON) -m src.train
 
 # API: Run the FastAPI server locally (Dev mode)
 serve:
