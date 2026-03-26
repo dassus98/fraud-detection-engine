@@ -7,7 +7,7 @@ import gc
 
 def get_feature_groups():
     """
-    Docstring for get_feature_groups
+    Returns named groups of feature columns for use in incremental training experiments.
     """
 
     # Setting a baseline for the most basic of features
@@ -29,7 +29,7 @@ def get_feature_groups():
 
 def train_and_evaluate(df, features, stage_name):
     """
-    Docstring for train_and_evaluate
+    Trains a LightGBM classifier on the given features and returns validation AUC.
     """
 
     print(f'\n--- Training Stage: {stage_name} ---')

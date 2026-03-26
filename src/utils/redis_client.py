@@ -4,7 +4,7 @@ import logging
 
 class RedisClient:
     """
-    Docstring for RedisClient
+    Thin wrapper around Redis that establishes a connection at init and logs a warning on failure.
     """
     def __init__(self, host = None, port = None):
         self.host = host
