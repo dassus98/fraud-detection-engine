@@ -4,10 +4,11 @@ import seaborn as sns
 import logging
 import joblib
 
-logging.basicConfig(level = logging.INFO, format = '%(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 def plot_feature_importance(model_path = 'models/lgbm_model_v1.pkl'):
-    logging.info(f'Loading model from {model_path}...')
+    logger.info(f'Loading model from {model_path}...')
     model_wrapper = joblib.load(model_path)
     model = model_wrapper.model
 
@@ -19,15 +20,15 @@ def plot_feature_importance(model_path = 'models/lgbm_model_v1.pkl'):
         'Importance': importances
     }).sort_values('Importance', ascending = False)
 
-    logging.info('Top features by gain:')
-    logging.info(df.head(10))
+    logger.info('Top features by gain:')
+    logger.info(df.head(10))
 
     graph_features = [feat for feat in feature_names if 'graph' in feat]
-    logging.info('Graph feature ranking:')
+    logger.info('Graph feature ranking:')
     for feat in graph_features:
         rank = df[df['Feature'] == feat].index[0]
         score = df[df['Feature'] == feat]['Importance'].values[0]
-        logging.info(f' - {feat}: Rank {rank} (Score: {score:.2f})')
+        logger.info(f' - {feat}: Rank {rank} (Score: {score:.2f})')
 
 if __name__ == '__main__':
     plot_feature_importance()

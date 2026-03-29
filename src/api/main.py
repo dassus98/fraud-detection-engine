@@ -113,9 +113,11 @@ def predict(txn: TransactionRequest):
     if artifacts['model'] is None or artifacts['pipeline'] is None:
         raise HTTPException(status_code=503, detail='Artifacts not loaded.')
 
-    input_data = txn.dict()
+    # Replace Python None with np.nan so pandas creates float columns
+    # instead of object columns (LightGBM rejects object dtype).
+    input_data = {k: (float('nan') if v is None else v) for k, v in txn.dict().items()}
     txn_id = input_data.get('TransactionID', 'N/A')
-    logger.info(f'Scoring transaction {txn_id}')
+    logger.info(f'Scoring transaction {txn_id} | amt={input_data.get("TransactionAmt")} product={input_data.get("ProductCD")}')
 
     try:
         df = pd.DataFrame([input_data])

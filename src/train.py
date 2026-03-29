@@ -65,14 +65,16 @@ def train_production_model():
     model = FraudModel()
     model.train(X_train_processed, y_train, X_val_processed, y_val)
 
-    # Evaluate model
-    val_preds = model.predict(X_val_processed)
-    roc_auc = roc_auc_score(y_val, val_preds)
-    pr_auc = average_precision_score(y_val, val_preds)
+    # Evaluate model — also sets model.optimal_threshold via economic cost function
+    metrics = model.evaluate(X_val_processed, y_val)
+    roc_auc = metrics['auc']
+    pr_auc = metrics['pr_auc']
 
     logger.info('--- Final Results ---')
-    logger.info(f'ROC-AUC: {roc_auc:.4f}')
-    logger.info(f'PR-AUC: {pr_auc:.4f}')
+    logger.info(f'ROC-AUC:            {roc_auc:.4f}')
+    logger.info(f'PR-AUC:             {pr_auc:.4f}')
+    logger.info(f'Optimal threshold:  {metrics["optimal_threshold"]:.3f}')
+    logger.info(f'Cost per txn:       ${metrics["cost_per_txn"]:.4f}')
 
     # Saving model
     os.makedirs(os.path.dirname(MODEL_SAVE_PATH), exist_ok=True)
