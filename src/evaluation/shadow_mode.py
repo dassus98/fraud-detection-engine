@@ -8,7 +8,6 @@ from src.config import DATA_PATH, MODEL_SAVE_PATH, PIPELINE_SAVE_PATH
 from src.utils import reduce_mem_usage
 from src.evaluation.metrics import calculate_economic_cost, find_optimal_threshold
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 COST_FN = 525   # cost per missed fraud (chargeback + overhead)
@@ -132,4 +131,5 @@ def run_shadow_simulation():
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     run_shadow_simulation()

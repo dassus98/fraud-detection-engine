@@ -11,19 +11,35 @@ logger = logging.getLogger(__name__)
 
 class FraudPipeline(BaseEstimator, TransformerMixin):
     """
-    Production pipeline intended to compelete four tasks:
-    - Cleaning up the V variables (done here to prevent data leakage)
-    - Feature selection
-    - Categorical encoding of object variables
-    - Null value handling
+    End-to-end feature transformer for the fraud detection model.
+
+    Applies four transformations in sequence:
+    1. V-feature pruning   — drops highly correlated V-columns (threshold 0.90)
+                             to reduce noise and training time.
+    2. Feature selection   — retains only the columns listed in SELECTED_FEATURES
+                             plus the surviving V-columns.
+    3. Categorical encoding — maps string categories to integers so LightGBM
+                             can use them as categorical splits.
+    4. Column alignment    — reindexes every output to the exact column list
+                             seen at fit time; columns missing at inference
+                             (e.g. V-features absent from API requests) become
+                             NaN, which LightGBM handles natively.
     """
+
     def __init__(self):
         self.v_cleaner = VFeatureCleaner()
         self.cat_encoders = {}
+
+        # Full candidate list of string columns that *could* be categorical.
+        # At fit time this is filtered down to only those columns that are
+        # both present in the training data AND listed in SELECTED_FEATURES
+        # (stored as self.cat_cols).  M2, M3, M8, M9 are listed here as
+        # candidates but are not in SELECTED_FEATURES, so they are silently
+        # ignored during encoding.
         self.string_cols = [
-            'ProductCD', 'card4', 'card6', 
+            'ProductCD', 'card4', 'card6',
             'P_emaildomain', 'R_emaildomain',
-            'M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7', 'M8', 'M9'
+            'M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7', 'M8', 'M9',
         ]
 
     def fit(self, X, y=None):

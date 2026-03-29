@@ -12,8 +12,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.config import SELECTED_FEATURES
-
 
 # ---------------------------------------------------------------------------
 # Minimal DataFrame that looks like the real training data

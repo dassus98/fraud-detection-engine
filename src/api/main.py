@@ -1,12 +1,14 @@
 import os
 import logging
 import traceback
+import warnings
+from contextlib import asynccontextmanager
 
 import pandas as pd
 import joblib
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from src.config import MODEL_SAVE_PATH, PIPELINE_SAVE_PATH
 from src.pipeline import FraudPipeline
@@ -21,12 +23,6 @@ except ImportError:
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-app = FastAPI(
-    title='Fraud Detection Engine',
-    description='Real-time fraud detection API using LightGBM',
-    version='1.0.0',
-)
 
 # All ML artifacts live here; populated once at startup.
 artifacts: dict = {
@@ -44,24 +40,31 @@ redis_store = RedisClient()
 # ---------------------------------------------------------------------------
 
 class TransactionRequest(BaseModel):
-    """Core transaction fields; any additional model features can be passed as extras."""
+    """
+    Core transaction fields sent to /predict.
+
+    Only TransactionAmt, ProductCD, and card1 are required.  Any additional
+    model features (card2–card6, D-cols, C-cols, M-cols, V-cols, etc.) may be
+    included as extra fields and will be forwarded to the pipeline.  Absent
+    features are filled with NaN; LightGBM handles NaN natively via its
+    missing-value splits.
+    """
+    # ``model_config`` replaces the old inner ``class Config`` (Pydantic v2).
+    model_config = ConfigDict(extra='allow')
+
     TransactionID: int = None
     TransactionAmt: float
     ProductCD: str
     card1: int
     card2: float = None
 
-    class Config:
-        extra = 'allow'
-
 
 # ---------------------------------------------------------------------------
-# Startup
+# Startup / shutdown lifecycle
 # ---------------------------------------------------------------------------
 
-@app.on_event('startup')
-def load_artifacts():
-    """Load model, pipeline, and SHAP explainer once at startup."""
+def _load_artifacts():
+    """Load model, pipeline, and SHAP explainer from disk into ``artifacts``."""
     logger.info('Loading ML artifacts...')
 
     for path, label in [(MODEL_SAVE_PATH, 'model'), (PIPELINE_SAVE_PATH, 'pipeline')]:
@@ -90,6 +93,26 @@ def load_artifacts():
         logger.warning('shap package not installed — explanations will be unavailable.')
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI lifespan handler — runs _load_artifacts() once at startup.
+    Using the lifespan pattern (rather than the deprecated @app.on_event)
+    ensures compatibility with FastAPI 0.93+ and Starlette's async lifecycle.
+    """
+    _load_artifacts()
+    yield
+    # Nothing to clean up on shutdown; OS reclaims memory automatically.
+
+
+app = FastAPI(
+    title='Fraud Detection Engine',
+    description='Real-time fraud detection API using LightGBM',
+    version='1.0.0',
+    lifespan=lifespan,
+)
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -115,7 +138,8 @@ def predict(txn: TransactionRequest):
 
     # Replace Python None with np.nan so pandas creates float columns
     # instead of object columns (LightGBM rejects object dtype).
-    input_data = {k: (float('nan') if v is None else v) for k, v in txn.dict().items()}
+    # model_dump() is the Pydantic v2 equivalent of the deprecated .dict().
+    input_data = {k: (float('nan') if v is None else v) for k, v in txn.model_dump().items()}
     txn_id = input_data.get('TransactionID', 'N/A')
     logger.info(f'Scoring transaction {txn_id} | amt={input_data.get("TransactionAmt")} product={input_data.get("ProductCD")}')
 
@@ -177,10 +201,21 @@ def _compute_top_shap(df_processed: pd.DataFrame, n: int = 3) -> list[dict]:
         return []
 
     try:
-        shap_values = explainer.shap_values(df_processed)
+        # SHAP 0.41+ emits a UserWarning on every call to note that binary
+        # LightGBM output changed to a list of ndarrays.  We handle both
+        # formats below, so the warning is suppressed to keep production logs
+        # clean.  Any *other* warnings inside this block are still propagated.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                'ignore',
+                message='LightGBM binary classifier.*list of ndarray',
+                category=UserWarning,
+            )
+            shap_values = explainer.shap_values(df_processed)
 
-        # TreeExplainer on a binary LightGBM booster returns a single 2-D array;
-        # for multi-output it returns a list — take the positive-class slice.
+        # TreeExplainer on a binary LightGBM booster returns either a single
+        # 2-D array (SHAP ≥ 0.41) or a list [neg_class, pos_class] (older).
+        # In both cases we want the positive-class (fraud) values.
         if isinstance(shap_values, list):
             shap_values = shap_values[1]
 

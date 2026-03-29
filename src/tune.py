@@ -12,7 +12,6 @@ from src.config import DATA_PATH, PARAMS_PATH
 from src.utils import reduce_mem_usage
 from optuna.integration import LightGBMPruningCallback
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Defining global var at modular level for safety
@@ -107,4 +106,5 @@ def run_tuning():
     logger.info(f'Saved best params to: {PARAMS_PATH}')
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     run_tuning()

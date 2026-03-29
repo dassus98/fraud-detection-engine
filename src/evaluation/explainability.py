@@ -15,7 +15,6 @@ from src.config import DATA_PATH, MODEL_SAVE_PATH, PIPELINE_SAVE_PATH
 from src.models.fraud_model import FraudModel
 from src.utils import reduce_mem_usage
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 REPORTS_DIR = 'reports'
@@ -63,10 +62,16 @@ def run_explainability():
     X_val = _load_validation_set(pipeline)
     feature_names = X_val.columns.tolist()
 
-    # Compute SHAP values against the native lgb.Booster
+    # Compute SHAP values against the native lgb.Booster.
+    # SHAP 0.41+ returns a single 2-D array for binary classifiers; older
+    # versions returned a list [neg_class, pos_class].  Both cases are handled.
     logger.info('Computing SHAP values with TreeExplainer...')
     explainer = shap.TreeExplainer(fraud_model.model)
-    shap_values = explainer.shap_values(X_val)  # shape: (n_samples, n_features)
+    shap_values = explainer.shap_values(X_val)
+    if isinstance(shap_values, list):
+        # Older SHAP: take the positive-class (fraud) slice.
+        shap_values = shap_values[1]
+    # shap_values shape: (n_samples, n_features)
 
     # Rank all features by mean absolute SHAP value
     mean_abs_shap = np.abs(shap_values).mean(axis=0)
@@ -116,4 +121,5 @@ def run_explainability():
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     run_explainability()

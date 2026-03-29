@@ -4,33 +4,33 @@
 
   Transactions evaluated   : 118,108
   Total fraud cases        : 4,064 (3.44%)
-  Decision threshold       : 0.15
+  Decision threshold       : 0.16
 
 --- Confusion Matrix ---
-  True positives (TP)      : 2,149
-  False negatives (FN)     : 1,915
-  False positives (FP)     : 1,743
-  True negatives (TN)      : 112,301
+  True positives (TP)      : 2,124
+  False negatives (FN)     : 1,940
+  False positives (FP)     : 1,626
+  True negatives (TN)      : 112,418
 
 --- Dollar Impact ---
-  Fraud caught             : $  290,636.56
-  Fraud missed             : $  319,297.78
-  Fraud catch rate         : 47.7%
+  Fraud caught             : $  284,267.03
+  Fraud missed             : $  325,667.31
+  Fraud catch rate         : 46.6%
 
 --- Operational Impact ---
-  Legitimate txns blocked  : 1,743
-  Block rate (FP rate)     : 1.53%
+  Legitimate txns blocked  : 1,626
+  Block rate (FP rate)     : 1.43%
 
 --- Economic Cost Model ---
   Cost per FN (missed)     : $525
   Cost per FP (blocked)    : $150
   Baseline cost (no model) : $   2,133,600
-  Model total cost         : $   1,266,825
-  Net revenue saved        : $     866,775
-  Cost per transaction     : $10.7260
+  Model total cost         : $   1,262,400
+  Net revenue saved        : $     871,200
+  Cost per transaction     : $10.6885
 
 --- Classification Metrics ---
-  Precision                : 0.5522
-  Recall                   : 0.5288
+  Precision                : 0.5664
+  Recall                   : 0.5226
 
 ============================================================

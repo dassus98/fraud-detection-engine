@@ -10,7 +10,9 @@ from sklearn.metrics import roc_auc_score, average_precision_score
 from src.evaluation.metrics import calculate_economic_cost, find_optimal_threshold
 from src.config import PARAMS_PATH
 
-logging.basicConfig(level = logging.INFO, format = '%(asctime)s - %(levelname)s - %(message)s')
+# Library modules must not call logging.basicConfig — that is the entry
+# point's (train.py / main.py) responsibility.  We only obtain a named
+# logger here; the root handler is configured by whoever runs the process.
 logger = logging.getLogger(__name__)
 
 class FraudModel:
