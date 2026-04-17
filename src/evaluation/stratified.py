@@ -77,14 +77,17 @@ class StratifiedEvaluator:
             labels=['Low (<$50)', 'Med ($50–$200)', 'High (>$200)'],
         )
 
-        # Identify the numeric feature columns the model was trained on.
+        # Identify the feature columns the model was trained on.
         # We exclude meta-columns that are not model features.
+        # NOTE: Do NOT filter by dtype here — LightGBM requires all columns that
+        # were present at training time, including 'category'-typed categoricals.
+        # Filtering with select_dtypes(include=['number']) would silently drop
+        # those columns and cause a feature-count mismatch at predict time.
         exclude_cols = [target_col, 'TransactionID', 'TransactionDT', 'Amt_Bin']
         feature_cols = [c for c in df.columns if c not in exclude_cols]
-        numeric_cols = df[feature_cols].select_dtypes(include=['number', 'bool']).columns.tolist()
 
         # Score the full dataset in one pass, then slice by band.
-        y_pred_proba = self.model.predict(df[numeric_cols])
+        y_pred_proba = self.model.predict(df[feature_cols])
 
         report = []
 

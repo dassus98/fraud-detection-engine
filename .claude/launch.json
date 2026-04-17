@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "streamlit",
+      "runtimeExecutable": "wsl",
+      "runtimeArgs": ["-e", "bash", "-c", "cd /home/dchit/projects/buffett-screener && .venv/bin/streamlit run output/streamlit_app.py --server.headless true --server.port 8501"],
+      "port": 8501
+    }
+  ]
+}

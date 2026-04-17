@@ -1,5 +1,5 @@
 # Base Image: Lightweight Python
-FROM python:3.9-slim as builder
+FROM python:3.12-slim as builder
 
 # Set working directory
 WORKDIR /app
@@ -15,7 +15,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # Final Stage
-FROM python:3.9-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
