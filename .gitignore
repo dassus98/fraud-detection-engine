@@ -21,14 +21,15 @@ env/
 .env.*
 !.env.example
 
-# Data and runtime artifacts
-data/
-logs/
-models/
+# Data and runtime artifacts (anchored to repo root so src/fraud_engine/data/
+# and src/fraud_engine/models/ packages are NOT ignored).
+/data/
+/logs/
+/models/
+/mlruns/
 *.joblib
 *.pkl
 *.pt
-mlruns/
 
 # Tool caches
 .pytest_cache/
