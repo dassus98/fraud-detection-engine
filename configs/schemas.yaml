@@ -1,0 +1,21 @@
+# Pandera schema registry. Populated in Sprint 1.
+#
+# Structure once populated:
+#   transactions:
+#     version: 1
+#     columns:
+#       transaction_id: { dtype: string, nullable: false, unique: true }
+#       user_id: { dtype: string, nullable: false }
+#       amount: { dtype: float64, nullable: false, checks: { greater_than: 0 } }
+#       ...
+#   identity:
+#     version: 1
+#     columns:
+#       user_id: { dtype: string, nullable: false, unique: true }
+#       ...
+#
+# Every schema is loaded at pipeline boundaries and failures fail loud.
+# Evolution history is tracked per schema via `version:` and an adjacent
+# CHANGELOG section once we have a second version.
+
+schemas: {}
