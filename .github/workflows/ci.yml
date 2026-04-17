@@ -1,0 +1,54 @@
+# Universal Standards require:
+#   lint -> type-check -> test -> build Docker image -> smoke-test API
+# Sprint 0 implements the first three. Docker build and API smoke-test
+# are added in Sprint 5 when the serving layer exists.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.9.24"
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --all-extras --frozen
+
+      - name: Ruff check
+        run: uv run ruff check src tests scripts
+
+      - name: Ruff format (enforce)
+        run: uv run ruff format --check src tests scripts
+
+      - name: Mypy (strict, src only)
+        run: uv run mypy src
+
+      - name: Pytest (unit)
+        run: uv run pytest tests/unit --no-cov -q
+
+      - name: Verify bootstrap
+        run: uv run python scripts/verify_bootstrap.py
