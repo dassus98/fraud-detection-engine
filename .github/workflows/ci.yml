@@ -48,7 +48,7 @@ jobs:
         run: uv run mypy src
 
       - name: Pytest (unit)
-        run: uv run pytest tests/unit --no-cov -q
+        run: uv run python -m pytest tests/unit --no-cov -q
 
       - name: Verify bootstrap
         run: uv run python scripts/verify_bootstrap.py

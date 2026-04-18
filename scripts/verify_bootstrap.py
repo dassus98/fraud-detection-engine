@@ -57,7 +57,7 @@ class CheckResult:
 _CHECKS: tuple[Check, ...] = (
     Check(name="ruff", command=["uv", "run", "ruff", "check", "."]),
     Check(name="mypy", command=["uv", "run", "mypy", "src"]),
-    Check(name="pytest", command=["uv", "run", "pytest", "-q", "tests/unit", "--no-cov"]),
+    Check(name="pytest", command=["uv", "run", "python", "-m", "pytest", "-q", "tests/unit", "--no-cov"]),
     Check(
         name="settings",
         command=[

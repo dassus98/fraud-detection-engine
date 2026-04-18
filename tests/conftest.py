@@ -9,7 +9,7 @@ filesystem / settings state so no test ever writes to the real
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -89,7 +89,7 @@ def small_transactions_df() -> pd.DataFrame:
         currency, merchant_id, timestamp, is_fraud.
     """
     rng = np.random.default_rng(_FIXTURE_SEED)
-    base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    base_time = datetime(2026, 1, 1, tzinfo=UTC)
     return pd.DataFrame(
         {
             "transaction_id": [f"tx_{i:05d}" for i in range(_N_ROWS_SMALL)],

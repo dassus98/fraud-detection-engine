@@ -24,16 +24,16 @@ typecheck:  ## Type-check src/ with mypy strict mode.
 	uv run mypy src
 
 test:  ## Run the full test suite with coverage.
-	uv run pytest
+	uv run python -m pytest
 
 test-fast:  ## Run unit tests only, no coverage, quiet.
-	uv run pytest tests/unit -q --no-cov
+	uv run python -m pytest tests/unit -q --no-cov
 
 test-integration:  ## Run integration tests (requires Redis, Postgres).
-	uv run pytest tests/integration
+	uv run python -m pytest tests/integration
 
 test-lineage:  ## Run schema-lineage tests.
-	uv run pytest tests/lineage
+	uv run python -m pytest tests/lineage
 
 data-download:  ## Download raw datasets. Implemented in Sprint 1.
 	@echo "data-download: implemented in Sprint 1"; exit 1

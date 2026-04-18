@@ -37,9 +37,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # src/fraud_engine/config/settings.py is 3 parents deep from the repo root.
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[3]
 
-_VALID_LOG_LEVELS: frozenset[str] = frozenset(
-    {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-)
+_VALID_LOG_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
 
 class Settings(BaseSettings):
@@ -204,9 +202,7 @@ class Settings(BaseSettings):
         """
         normalised = value.upper()
         if normalised not in _VALID_LOG_LEVELS:
-            raise ValueError(
-                f"log_level={value!r} is not in {sorted(_VALID_LOG_LEVELS)}"
-            )
+            raise ValueError(f"log_level={value!r} is not in {sorted(_VALID_LOG_LEVELS)}")
         return normalised
 
     # ---------------------------------------------------------------
