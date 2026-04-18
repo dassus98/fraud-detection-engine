@@ -23,10 +23,17 @@ env/
 
 # Data and runtime artifacts (anchored to repo root so src/fraud_engine/data/
 # and src/fraud_engine/models/ packages are NOT ignored).
-/data/
+# Uses the /data/* + !/data/raw/ + /data/raw/* + !/data/raw/MANIFEST.json
+# pattern so MANIFEST.json survives the ignore while every CSV under
+# data/raw/ is still ignored. Parent-dir traversal requires the negations.
+/data/*
+!/data/raw/
+/data/raw/*
+!/data/raw/MANIFEST.json
 /logs/
 /models/
 /mlruns/
+/reports/
 *.joblib
 *.pkl
 *.pt

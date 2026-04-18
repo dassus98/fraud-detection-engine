@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 .PHONY: help install format lint typecheck test test-fast test-integration \
-        test-lineage data-download train serve docker-up docker-down clean
+        test-lineage data-download data-profile train serve docker-up docker-down clean
 
 # Load .env so API_HOST / API_PORT flow into `make serve`.
 # Uses `-include` so the target doesn't break before `.env` is created.
@@ -35,8 +35,11 @@ test-integration:  ## Run integration tests (requires Redis, Postgres).
 test-lineage:  ## Run schema-lineage tests.
 	uv run python -m pytest tests/lineage
 
-data-download:  ## Download raw datasets. Implemented in Sprint 1.
-	@echo "data-download: implemented in Sprint 1"; exit 1
+data-download:  ## Fetch IEEE-CIS from Kaggle into data/raw/ and write the manifest.
+	uv run python scripts/download_data.py
+
+data-profile:  ## Render reports/raw_profile.{html,json} from the merged raw frame.
+	uv run python scripts/profile_raw.py
 
 train:  ## Train models. Implemented in Sprint 3.
 	@echo "train: implemented in Sprint 3"; exit 1

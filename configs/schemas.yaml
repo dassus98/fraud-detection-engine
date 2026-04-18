@@ -1,21 +1,39 @@
-# Pandera schema registry. Populated in Sprint 1.
+# Pandera schema registry.
 #
-# Structure once populated:
-#   transactions:
-#     version: 1
-#     columns:
-#       transaction_id: { dtype: string, nullable: false, unique: true }
-#       user_id: { dtype: string, nullable: false }
-#       amount: { dtype: float64, nullable: false, checks: { greater_than: 0 } }
-#       ...
-#   identity:
-#     version: 1
-#     columns:
-#       user_id: { dtype: string, nullable: false, unique: true }
-#       ...
+# Each entry points at the Python module that defines the `DataFrameSchema`
+# and records the current `version` for drift detection. The lineage tests
+# load the module dynamically and validate against the exact version pinned
+# here; a silent bump in code without updating this file fails the lineage
+# gate in `tests/lineage/test_raw_lineage.py`.
 #
-# Every schema is loaded at pipeline boundaries and failures fail loud.
-# Evolution history is tracked per schema via `version:` and an adjacent
-# CHANGELOG section once we have a second version.
-
-schemas: {}
+# Schema-evolution discipline (CLAUDE.md §7.1):
+#   1. Bump `SCHEMA_VERSION` in the module.
+#   2. Add a version-history entry to the module docstring.
+#   3. Update all consumers.
+#   4. Add a migration test if non-backward-compatible.
+#
+schemas:
+  transactions:
+    version: 1
+    module: fraud_engine.schemas.raw
+    symbol: TransactionSchema
+    description: >
+      Inbound contract for train_transaction.csv (Sprint 0 Prompt 2).
+      Core identity/target/amount/time columns plus regex groups for
+      C1..C14, D1..D15, M1..M9, V1..V339.
+  identity:
+    version: 1
+    module: fraud_engine.schemas.raw
+    symbol: IdentitySchema
+    description: >
+      Inbound contract for train_identity.csv (Sprint 0 Prompt 2).
+      Numeric id_01..id_11, categorical id_12..id_38, DeviceType,
+      DeviceInfo.
+  merged:
+    version: 1
+    module: fraud_engine.schemas.raw
+    symbol: MergedSchema
+    description: >
+      Contract for the left-joined transaction ⟕ identity frame.
+      Transaction-side required columns survive; identity-side columns
+      are optional (coverage ≈ 24%).

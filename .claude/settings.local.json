@@ -29,7 +29,9 @@
       "Bash(git -c safe.directory='*' log --oneline main..HEAD)",
       "Bash(git -c safe.directory='*' add sprints/sprint_0/prompt_0_1_report.md)",
       "Bash(git -c safe.directory='*' tag -a sprint-0-complete -m \"Sprint 0 complete: bootstrap green on Windows/WSL\")",
-      "Bash(git -c safe.directory='*' tag -l 'sprint-*' -n5)"
+      "Bash(git -c safe.directory='*' tag -l 'sprint-*' -n5)",
+      "Bash(env)",
+      "Bash(grep -n \"^\\\\.env$\\\\|^\\\\.env\\\\b\" .gitignore)"
     ]
   }
 }

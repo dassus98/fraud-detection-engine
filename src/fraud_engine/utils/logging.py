@@ -23,10 +23,13 @@ Trade-offs considered:
 
 from __future__ import annotations
 
+import functools
 import logging
 import sys
+import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 from uuid import uuid4
 
 import structlog
@@ -35,6 +38,9 @@ from structlog.stdlib import BoundLogger, LoggerFactory, ProcessorFormatter
 from structlog.typing import Processor
 
 from fraud_engine.config.settings import get_settings
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 # Module-level sentinel — configure_logging() is idempotent via this flag.
 _CONFIGURED: bool = False
@@ -177,6 +183,111 @@ def get_logger(name: str, **initial_values: Any) -> BoundLogger:
     if initial_values:
         logger = logger.bind(**initial_values)
     return logger  # type: ignore[no-any-return]
+
+
+def _describe(value: Any) -> dict[str, Any]:
+    """Return a small, JSON-safe shape summary of `value`.
+
+    Used by `log_call` so logs carry "what went in and what came out"
+    without dumping full DataFrame contents (PII risk, log bloat).
+
+    Rules:
+        - DataFrames / ndarrays / anything with `.shape`: emit the shape.
+        - Strings: emit length only (never the content).
+        - Path objects: emit the path string — assumed non-sensitive.
+        - Collections (list/dict/tuple/set): emit the length.
+        - Scalars (int/float/bool/None): emit the value.
+        - Anything else: emit only the type name.
+
+    Args:
+        value: The object to summarise.
+
+    Returns:
+        A flat dict with a `type` key and one of
+        `shape`/`length`/`value`/`path` depending on the branch taken.
+    """
+    type_name = type(value).__name__
+    if hasattr(value, "shape"):
+        return {"type": type_name, "shape": list(value.shape)}
+    if isinstance(value, str):
+        return {"type": "str", "length": len(value)}
+    if isinstance(value, Path):
+        return {"type": "Path", "path": str(value)}
+    if isinstance(value, bool | int | float) or value is None:
+        return {"type": type_name, "value": value}
+    if hasattr(value, "__len__"):
+        try:
+            return {"type": type_name, "length": len(value)}
+        except TypeError:
+            return {"type": type_name}
+    return {"type": type_name}
+
+
+def log_call(fn: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Decorate a function so every call logs entry, exit, and duration.
+
+    Emits three event names keyed on `fn.__qualname__`:
+        - `{qualname}.start` — arg shapes (positional + keyword)
+        - `{qualname}.done` — result shape + `duration_ms`
+        - `{qualname}.failed` — raised exception type / message +
+          `duration_ms`, then the exception is re-raised.
+
+    Business rationale:
+        CLAUDE.md §5.5 mandates that every function touching data logs
+        input shape, output shape, and duration. Writing that by hand
+        on every function drifts; a decorator keeps the discipline
+        mechanical and consistent.
+
+    Trade-offs considered:
+        - The decorator only peeks at `.shape` / `__len__` / `Path`,
+          never the underlying data. The alternative (full `repr`)
+          would risk spilling PII into logs.
+        - `time.perf_counter` is used for duration. It has ms-scale
+          precision on Windows/WSL which is plenty for pipeline timing.
+        - `functools.wraps` + `ParamSpec` preserves the wrapped
+          signature for mypy and IDE introspection.
+        - Exceptions are logged then re-raised. Swallowing them would
+          mask failures; eating and returning `None` would be worse
+          still.
+
+    Args:
+        fn: The callable to wrap. Methods work too — `self` shows up
+            in the shape log as an opaque object.
+
+    Returns:
+        A wrapped callable with the same signature as `fn`.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        logger = get_logger(fn.__module__)
+        event = fn.__qualname__
+        shapes: dict[str, Any] = {f"arg_{i}": _describe(a) for i, a in enumerate(args)}
+        shapes.update({f"kw_{k}": _describe(v) for k, v in kwargs.items()})
+        logger.info(f"{event}.start", **shapes)
+
+        start = time.perf_counter()
+        try:
+            result = fn(*args, **kwargs)
+        except Exception as exc:
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            logger.error(
+                f"{event}.failed",
+                duration_ms=round(duration_ms, 3),
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            raise
+
+        duration_ms = (time.perf_counter() - start) * 1000.0
+        logger.info(
+            f"{event}.done",
+            duration_ms=round(duration_ms, 3),
+            result=_describe(result),
+        )
+        return result
+
+    return wrapper
 
 
 def _configure_fallback() -> None:

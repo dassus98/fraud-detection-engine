@@ -42,6 +42,8 @@ dependencies = [
   # --- monitoring ---
   "prometheus-client==0.21.1",
   "mlflow==3.11.1",
+  # --- data acquisition ---
+  "kaggle==1.6.17",
 ]
 
 [project.optional-dependencies]
@@ -57,6 +59,8 @@ dev = [
   "detect-secrets==1.5.0",
   "ipykernel==6.29.5",
   "jupyter==1.1.1",
+  "pandas-stubs==2.2.3.241126",
+  "types-click==7.1.8",
 ]
 
 [tool.hatch.build.targets.wheel]
