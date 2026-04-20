@@ -1,0 +1,24 @@
+# Prometheus scrape config for the dev stack.
+#
+# One scrape every 15s — cheap on a laptop, fine-grained enough for the
+# fraud-API latency dashboards Sprint 6 will plot.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Prometheus self-scrape. Makes the `up{job="prometheus"}` heartbeat
+  # available so a Sprint 6 alerting rule can catch a dead Prometheus.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Sprint 5 exposes /metrics on the host API at $API_PORT (default 8000).
+  # The target reads "DOWN" on Prometheus's /targets page until the API
+  # boots — this is intentional and diagnostic during dev. When the API
+  # port changes, update both this file and settings.api_port.
+  - job_name: fraud-api
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+    metrics_path: /metrics

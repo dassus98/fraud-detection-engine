@@ -31,7 +31,15 @@
       "Bash(git -c safe.directory='*' tag -a sprint-0-complete -m \"Sprint 0 complete: bootstrap green on Windows/WSL\")",
       "Bash(git -c safe.directory='*' tag -l 'sprint-*' -n5)",
       "Bash(env)",
-      "Bash(grep -n \"^\\\\.env$\\\\|^\\\\.env\\\\b\" .gitignore)"
+      "Bash(grep -n \"^\\\\.env$\\\\|^\\\\.env\\\\b\" .gitignore)",
+      "Bash(mkdir -p \"\\\\\\\\\\\\\\\\wsl.localhost\\\\\\\\Ubuntu\\\\\\\\home\\\\\\\\dchit\\\\\\\\projects\\\\\\\\fraud-detection-engine\\\\\\\\docker\\\\\\\\prometheus\")",
+      "Bash(mkdir -p \"\\\\\\\\\\\\\\\\wsl.localhost\\\\\\\\Ubuntu\\\\\\\\home\\\\\\\\dchit\\\\\\\\projects\\\\\\\\fraud-detection-engine\\\\\\\\docker\\\\\\\\grafana\\\\\\\\provisioning\\\\\\\\datasources\")",
+      "Bash(mkdir -p \"\\\\\\\\\\\\\\\\wsl.localhost\\\\\\\\Ubuntu\\\\\\\\home\\\\\\\\dchit\\\\\\\\projects\\\\\\\\fraud-detection-engine\\\\\\\\docker\\\\\\\\grafana\\\\\\\\provisioning\\\\\\\\dashboards\")",
+      "Bash(mkdir -p docker/prometheus docker/grafana/provisioning/datasources docker/grafana/provisioning/dashboards)",
+      "Bash(rm tests/unit/test_log_call.py)",
+      "Bash(docker info *)",
+      "Read(//c/Users/dchit/**)",
+      "Bash(uvx detect-secrets@1.5.0 scan --baseline .secrets.baseline)"
     ]
   }
 }

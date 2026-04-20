@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help install format lint typecheck test test-fast test-integration \
-        test-lineage data-download data-profile train serve docker-up docker-down clean
+        test-lineage nb-test data-download data-profile train serve \
+        docker-up docker-down docker-ps clean
 
 # Load .env so API_HOST / API_PORT flow into `make serve`.
 # Uses `-include` so the target doesn't break before `.env` is created.
@@ -23,8 +24,9 @@ lint:  ## Lint with ruff.
 typecheck:  ## Type-check src/ with mypy strict mode.
 	uv run mypy src
 
-test:  ## Run the full test suite with coverage.
+test:  ## Run the full test suite with coverage (includes notebook smoke).
 	uv run python -m pytest
+	$(MAKE) nb-test
 
 test-fast:  ## Run unit tests only, no coverage, quiet.
 	uv run python -m pytest tests/unit -q --no-cov
@@ -34,6 +36,9 @@ test-integration:  ## Run integration tests (requires Redis, Postgres).
 
 test-lineage:  ## Run schema-lineage tests.
 	uv run python -m pytest tests/lineage
+
+nb-test:  ## Execute notebooks end-to-end via nbmake (catches util-rename drift).
+	uv run python -m pytest --no-cov --nbmake notebooks
 
 data-download:  ## Fetch IEEE-CIS from Kaggle into data/raw/ and write the manifest.
 	uv run python scripts/download_data.py
@@ -49,11 +54,14 @@ train:  ## Train models. Implemented in Sprint 3.
 serve:  ## Start the FastAPI server (requires Sprint 5 api module).
 	uv run uvicorn fraud_engine.api.main:app --host $(API_HOST) --port $(API_PORT)
 
-docker-up:  ## Start the docker-compose stack. Implemented in Sprint 5.
-	@echo "docker-up: implemented in Sprint 5"; exit 1
+docker-up:  ## Start the dev compose stack (Postgres, Redis, MLflow, Prometheus, Grafana).
+	docker compose -f docker-compose.dev.yml up -d
 
-docker-down:  ## Stop the docker-compose stack. Implemented in Sprint 5.
-	@echo "docker-down: implemented in Sprint 5"; exit 1
+docker-down:  ## Stop the dev compose stack.
+	docker compose -f docker-compose.dev.yml down
+
+docker-ps:  ## Show the dev stack's service status (including healthchecks).
+	docker compose -f docker-compose.dev.yml ps
 
 clean:  ## Remove test / type-check / build caches.
 	rm -rf .pytest_cache .ruff_cache .mypy_cache .pyright htmlcov .coverage coverage.xml build dist *.egg-info

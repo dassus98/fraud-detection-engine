@@ -24,26 +24,38 @@ Trade-offs considered:
 from __future__ import annotations
 
 import functools
+import hashlib
 import logging
 import sys
 import time
 from collections.abc import Callable
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 from uuid import uuid4
 
 import structlog
-from structlog.contextvars import bind_contextvars
+from structlog.contextvars import bind_contextvars, unbind_contextvars
 from structlog.stdlib import BoundLogger, LoggerFactory, ProcessorFormatter
 from structlog.typing import Processor
 
 from fraud_engine.config.settings import get_settings
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
 # Module-level sentinel — configure_logging() is idempotent via this flag.
 _CONFIGURED: bool = False
+
+# Per-request contextvar. Populated by API middleware (Sprint 5) on every
+# inbound request; read by every structlog record via
+# `merge_contextvars` so a single prediction's log trail is filterable by
+# `request_id` across the feature lookup, model inference, and SHAP
+# stages.
+_REQUEST_ID: ContextVar[str | None] = ContextVar("fraud_engine_request_id", default=None)
 
 
 def new_run_id() -> str:
@@ -57,6 +69,63 @@ def new_run_id() -> str:
         A 32-character hex string.
     """
     return uuid4().hex
+
+
+def bind_request_id(request_id: str | None = None) -> str:
+    """Bind a per-request ID to the current async/thread context.
+
+    Business rationale:
+        Sprint 5's API handles concurrent requests under a single
+        process-wide `run_id`. Without a request-scoped ID, the log
+        trail of one prediction interleaves with every other
+        in-flight prediction. Binding `request_id` via a ContextVar
+        keeps per-request correlation intact under asyncio, thread
+        pools, and ProcessPoolExecutor (each worker inherits the
+        parent's contextvar snapshot).
+
+    Trade-offs considered:
+        - A structlog `bound_logger.bind(request_id=...)` would work
+          but requires threading the logger through every call site.
+          A ContextVar + `merge_contextvars` lets any `get_logger()`
+          caller pick up the ID automatically.
+        - We bind into `structlog.contextvars` on top of the
+          ContextVar so JSON records include `request_id` alongside
+          `run_id`. The ContextVar is the source of truth for
+          `get_request_id()`; the structlog bind is the rendering
+          side.
+
+    Args:
+        request_id: Existing ID to bind — e.g. an
+            `X-Request-ID` header forwarded by an upstream gateway.
+            If None, a fresh UUID4 hex is generated.
+
+    Returns:
+        The request_id that was bound.
+    """
+    effective = request_id or uuid4().hex
+    _REQUEST_ID.set(effective)
+    bind_contextvars(request_id=effective)
+    return effective
+
+
+def get_request_id() -> str | None:
+    """Return the request_id bound to the current context, if any.
+
+    Returns:
+        The current request_id, or `None` if no request is active.
+    """
+    return _REQUEST_ID.get()
+
+
+def reset_request_id() -> None:
+    """Clear the request_id from the current context.
+
+    Called by request teardown middleware (Sprint 5). Removes the
+    contextvar value and unbinds the matching structlog key so future
+    records in the same task don't inherit a stale correlation ID.
+    """
+    _REQUEST_ID.set(None)
+    unbind_contextvars("request_id")
 
 
 def _shared_processors() -> list[Processor]:
@@ -221,6 +290,76 @@ def _describe(value: Any) -> dict[str, Any]:
         except TypeError:
             return {"type": type_name}
     return {"type": type_name}
+
+
+def log_dataframe(
+    df: pd.DataFrame,
+    *,
+    name: str,
+    logger: BoundLogger | None = None,
+) -> None:
+    """Emit a `dataframe.snapshot` event summarising the frame.
+
+    Logs shape, memory, dtype histogram, NaN count, and a SHA-256
+    fingerprint of the first non-null row. Values themselves are never
+    logged — the fingerprint is derived from a stringified form so two
+    identical frames hash identically, but an attacker reading the log
+    cannot invert the hash back to the underlying row.
+
+    Business rationale:
+        `@log_call` summarises arbitrary function arguments. But at
+        pipeline-stage boundaries (post-feature-merge, pre-training,
+        pre-serving), we want a richer DataFrame snapshot — dtype
+        counts catch silent object→category promotions, NaN counts
+        catch upstream data-quality drift, and the row hash lets us
+        prove two runs consumed the same input without shipping the
+        data itself to the log store.
+
+    Trade-offs considered:
+        - SHA-256 over the first row only, not every row. A full-frame
+          hash is O(N) and meaningful for contract tests, not routine
+          logs. The first-row hash is O(1) and still trips on column
+          reorderings.
+        - We call `df.memory_usage(deep=True)` which is slow on wide
+          object columns. Accept the cost: the boundary points where
+          `log_dataframe` is called are rare (entry/exit of a pipeline
+          stage), not hot loops.
+        - `dtypes.value_counts()` keeps the dtype histogram compact
+          regardless of column count — a 1000-column frame still logs
+          a ~5-entry dict.
+
+    Args:
+        df: The DataFrame to summarise.
+        name: A label for the snapshot (e.g. "post_merge", "train_X").
+            Emitted as `name` on the log record.
+        logger: Optional BoundLogger to emit through. Defaults to a
+            module-scoped logger; pass a caller-specific logger to
+            inherit its bound values.
+    """
+    emitter = logger if logger is not None else get_logger(__name__)
+    dtype_counts = {str(dt): int(n) for dt, n in df.dtypes.value_counts().items()}
+    memory_mb = float(df.memory_usage(deep=True).sum()) / (1024 * 1024)
+    # Fingerprint the first row's string representation. Using the first
+    # row (vs a random sample) keeps the hash stable across runs on
+    # identical data. String-concat rather than hashing the raw bytes
+    # avoids pickle-version coupling.
+    if len(df) > 0:
+        first_row = df.iloc[0]
+        row_repr = "|".join(f"{col}={first_row[col]!r}" for col in df.columns)
+        first_row_sha256 = hashlib.sha256(row_repr.encode("utf-8")).hexdigest()
+    else:
+        first_row_sha256 = ""
+
+    emitter.info(
+        "dataframe.snapshot",
+        name=name,
+        rows=int(df.shape[0]),
+        cols=int(df.shape[1]),
+        memory_mb=round(memory_mb, 4),
+        dtypes=dtype_counts,
+        n_missing=int(df.isna().sum().sum()),
+        first_row_sha256=first_row_sha256,
+    )
 
 
 def log_call(fn: Callable[_P, _R]) -> Callable[_P, _R]:

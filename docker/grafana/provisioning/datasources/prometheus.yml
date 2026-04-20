@@ -1,0 +1,16 @@
+# Grafana datasource provisioning.
+#
+# Grafana picks up this file on first boot (or container restart) and
+# materialises the Prometheus datasource automatically — no click-through
+# needed. `editable: true` lets devs tweak the URL in the UI for
+# experimentation without forcing a file edit.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

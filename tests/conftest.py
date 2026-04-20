@@ -55,21 +55,27 @@ def mock_settings(
     Env vars are set via monkeypatch so the Settings class re-reads a
     fresh environment. The `get_settings` lru_cache is cleared before
     and after so neighbouring tests see their own values, not this
-    test's.
+    test's. All three writable directories (DATA_DIR / MODELS_DIR /
+    LOGS_DIR) are redirected into tmp_path so code paths that call
+    `get_settings()` directly still land on isolated disk.
 
     Yields:
         A configured Settings instance whose writes never touch the
         real repo.
     """
+    models_dir = tmp_path / "models"
+    logs_dir = tmp_path / "logs"
     monkeypatch.setenv("DATA_DIR", str(tmp_data_dir))
+    monkeypatch.setenv("MODELS_DIR", str(models_dir))
+    monkeypatch.setenv("LOGS_DIR", str(logs_dir))
     monkeypatch.setenv("SEED", "42")
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
 
     get_settings.cache_clear()
     settings = Settings(
         data_dir=tmp_data_dir,
-        models_dir=tmp_path / "models",
-        logs_dir=tmp_path / "logs",
+        models_dir=models_dir,
+        logs_dir=logs_dir,
     )
     settings.ensure_directories()
     yield settings

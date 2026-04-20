@@ -154,6 +154,50 @@ class Settings(BaseSettings):
             "switches to a server URI in Sprint 5."
         ),
     )
+    mlflow_experiment_name: str = Field(
+        default="fraud-detection",
+        description=(
+            "Default MLflow experiment name. Sprint 3 opens all "
+            "training runs under this experiment; Sprint 4 threshold "
+            "sweeps reuse it so the full model-selection trail lives "
+            "in one tree."
+        ),
+    )
+    mlflow_port: int = Field(
+        default=5000,
+        description=(
+            "Host port the MLflow tracking server binds to in "
+            "docker-compose.dev.yml. Same port the UI is served on."
+        ),
+    )
+    prometheus_port: int = Field(
+        default=9090,
+        description=(
+            "Host port for the Prometheus scrape/UI. Drives "
+            "docker-compose.dev.yml port publishing."
+        ),
+    )
+    grafana_port: int = Field(
+        default=3000,
+        description=(
+            "Host port for the Grafana UI. Drives " "docker-compose.dev.yml port publishing."
+        ),
+    )
+    grafana_admin_user: str = Field(
+        default="admin",
+        description=(
+            "Initial Grafana admin username seeded into the container "
+            "via GF_SECURITY_ADMIN_USER. Override in .env for any "
+            "shared environment."
+        ),
+    )
+    grafana_admin_password: SecretStr = Field(
+        default=SecretStr("admin"),
+        description=(
+            "Initial Grafana admin password. `admin/admin` is the "
+            "dev-only default; production deployments must override."
+        ),
+    )
 
     # --- provider credentials --------------------------------------
     kaggle_username: str | None = Field(

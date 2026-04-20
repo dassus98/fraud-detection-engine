@@ -21,6 +21,11 @@ env/
 .env.*
 !.env.example
 
+# Kaggle credentials (JSON format). Mirror of .env creds in Kaggle's
+# native kaggle.json format; never commit either representation.
+kaggle.json
+.kaggle/
+
 # Data and runtime artifacts (anchored to repo root so src/fraud_engine/data/
 # and src/fraud_engine/models/ packages are NOT ignored).
 # Uses the /data/* + !/data/raw/ + /data/raw/* + !/data/raw/MANIFEST.json
