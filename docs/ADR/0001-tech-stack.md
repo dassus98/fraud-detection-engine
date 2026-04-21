@@ -19,21 +19,24 @@ fine but requires a new ADR justifying the move.
 
 ## Decision
 
-| Layer             | Choice                 |
-| ----------------- | ---------------------- |
-| Language          | Python 3.11            |
-| Dep mgmt          | uv (locked uv.lock)    |
-| Primary model     | LightGBM               |
-| Explainability    | SHAP (TreeExplainer)   |
-| Graph / identity  | torch-geometric + networkx |
-| Noisy-label audit | cleanlab               |
-| HPO               | Optuna                 |
-| Online store      | Redis                  |
-| Serving framework | FastAPI + uvicorn      |
-| Validation        | Pydantic + pandera     |
-| Logging           | structlog              |
-| Tracking          | MLflow                 |
-| Metrics           | prometheus-client      |
+| Layer              | Choice                      |
+| ------------------ | --------------------------- |
+| Language           | Python 3.11                 |
+| Dep mgmt           | uv (locked uv.lock)         |
+| Primary model      | LightGBM                    |
+| Experimental ML    | PyTorch                     |
+| Explainability     | SHAP (TreeExplainer)        |
+| Graph / identity   | torch-geometric + networkx  |
+| Noisy-label audit  | cleanlab                    |
+| HPO                | Optuna                      |
+| Online store       | Redis                       |
+| Batch store        | PostgreSQL                  |
+| Serving framework  | FastAPI + uvicorn           |
+| Validation         | Pydantic + pandera          |
+| Logging            | structlog                   |
+| Tracking           | MLflow                      |
+| Metrics            | prometheus-client           |
+| Dashboards         | Grafana                     |
 
 ### Why LightGBM
 
@@ -56,21 +59,45 @@ LightGBM. Deep end-to-end models were considered and rejected: the
 latency and interpretability gap is not worth the small headline AUC
 gain.
 
-### Why Redis
+### Why PyTorch (experimental track only)
 
-- **Sub-millisecond lookups.** Feature serving reads 100+ cached
-  aggregates per scoring call; Redis's in-memory key-value model
-  supports that at O(1) with predictable tail latency.
-- **Shared across replicas.** A horizontally-scaled FastAPI fleet
-  needs one consistent view of aggregate state — in-process caches
-  can't provide that.
-- **Durability via AOF.** The append-only log gives us point-in-time
-  replay for debugging without the overhead of a full SQL journal.
+- **Diversity model lineage.** Model B (FraudNet entity-embedding NN)
+  and Model C (FraudGNN via torch-geometric) both need PyTorch as
+  their execution engine. Keeping one deep-learning framework means
+  one set of CUDA/CPU wheels, one autograd model, one
+  serialisation format.
+- **torch-geometric requires it.** PyG is not portable to TF or JAX;
+  adopting PyG (see next row) forces the PyTorch decision anyway.
+- **Scoped to experimental.** PyTorch is not on the production
+  serving path — Model A (LightGBM) is. Model B is shadow-deployable
+  and Model C is batch-only. This keeps the production image slim
+  and the inference path free of torch runtime overhead.
 
-**Trade-off:** Redis is an extra operational surface (memory sizing,
-eviction policy, failover). We accept the cost in exchange for
-latency headroom. For offline feature store and audit log we use
-Postgres, not Redis.
+**Trade-off:** ~1.5 GB install footprint even on CPU, and a second
+model-format surface (`.pt` vs `.joblib`) to document in the model
+card. Accepted for the interpretability-vs-recall diversity story.
+
+### Why Redis + PostgreSQL (two-tier feature store)
+
+- **Sub-millisecond lookups (Redis).** Feature serving reads 100+
+  cached aggregates per scoring call; Redis's in-memory key-value
+  model supports that at O(1) with predictable tail latency.
+- **Shared across replicas (Redis).** A horizontally-scaled FastAPI
+  fleet needs one consistent view of aggregate state — in-process
+  caches can't provide that.
+- **Durability via AOF (Redis).** The append-only log gives us
+  point-in-time replay for debugging without the overhead of a full
+  SQL journal.
+- **Batch store (Postgres).** Nightly-refreshed behavioural features
+  (Tier 3) and the prediction audit log live in Postgres. SQL gives
+  us ad-hoc joins for analyst investigations; Redis TTLs would
+  erase the audit trail. Postgres also hosts the offline training
+  feature snapshots so batch and online reads can be reconciled.
+
+**Trade-off:** Two stateful services to operate, not one. We accept
+the split because real-time and batch have genuinely different
+access patterns (hot-key vs analytical), and collapsing them into
+one store compromises one of them.
 
 ### Why FastAPI + uvicorn
 
@@ -111,18 +138,53 @@ garbage" debugging.
 **Trade-off:** More ceremony than stdlib logging (processor chain,
 configuration). The payoff — traceable pipelines — is worth it.
 
+### Why Prometheus + Grafana
+
+- **Pull-based scraping (Prometheus).** `prometheus-client` exposes
+  counters / histograms on a `/metrics` endpoint; Prometheus pulls
+  them on a fixed cadence. No agent sidecar, no push gateway to
+  operate, and the scrape loop is the same contract at dev and
+  prod.
+- **Fraud-native dashboards (Grafana).** Sprint 6 ships pre-built
+  panels: P95 latency heatmap, fraud-capture rate by day, PSI
+  drift per feature group, Redis hit ratio, threshold-decision
+  breakdown by cost bucket. These are the signals oncall watches;
+  wiring them into Grafana means the alerting surface is defined
+  with the rest of the stack, not bolted on later.
+- **Open-source and local-friendly.** Both run from the project's
+  `docker-compose.dev.yml` on a laptop; no vendor account needed
+  to reproduce the production observability posture.
+
+**Trade-off:** Grafana dashboards are JSON blobs that drift from
+the codebase they describe. We mitigate by version-controlling the
+dashboard JSON under `docker/grafana/` and treating dashboard
+changes as code review items.
+
 ## Consequences
 
 - **Positive.** Shared tooling between dev and prod (JSON logs, MLflow
-  runs). Fast inference path from day one. Interpretability is
-  built-in, not bolted on. Schema violations fail loud at ingest.
+  runs, Grafana dashboards). Fast inference path from day one.
+  Interpretability is built-in, not bolted on. Schema violations fail
+  loud at ingest. Two-tier feature store matches real production
+  patterns at Canadian fintech peers.
 - **Negative.** uv is younger than Poetry / pip-tools; if the tool
   becomes abandoned we need a migration plan (escape hatch:
   `uv export -o requirements.txt`). torch + torch-geometric inflate
   install size by ~2 GB — we mitigate with a future CPU-only extra.
+  Redis + Postgres + Prometheus + Grafana is four stateful services
+  to stand up for a full local reproduction; `docker-compose.dev.yml`
+  is the mitigation.
+- **Neutral.** Stack skews heavily toward the Python / PyData
+  ecosystem. A future Go- or Rust-based serving rewrite for the
+  absolute latency floor is possible but not on the current roadmap;
+  that would be a follow-up ADR, not a blocker here. MLflow locks us
+  to its tracking-server contract; if we move to Weights & Biases or
+  a bespoke registry, the experiment history is exportable but
+  migration is not free.
 - **Revisit triggers.** A GBM cap at ~95 % AUC that DL could close, a
-  Redis write-amplification issue under load, or an mlflow-3.x API
-  regression — any of these warrants a new ADR.
+  Redis write-amplification issue under load, an mlflow-3.x API
+  regression, or a Grafana / Prometheus replacement driven by a
+  managed-observability mandate — any of these warrants a new ADR.
 
 ## References
 

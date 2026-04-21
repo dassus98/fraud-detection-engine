@@ -54,8 +54,14 @@ class CheckResult:
 
 
 # Order matters: fail fast on lint before booting the heavier tools.
+# `ruff format --check` runs right after `ruff check` because a format
+# violation is strictly cheaper to diagnose than a mypy or pytest failure.
 _CHECKS: tuple[Check, ...] = (
     Check(name="ruff", command=["uv", "run", "ruff", "check", "."]),
+    Check(
+        name="format",
+        command=["uv", "run", "ruff", "format", "--check", "src", "tests", "scripts"],
+    ),
     Check(name="mypy", command=["uv", "run", "mypy", "src"]),
     Check(
         name="pytest",

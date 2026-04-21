@@ -57,6 +57,11 @@ from fraud_engine.data.loader import RawDataLoader
 from fraud_engine.schemas.raw import SCHEMA_VERSION
 from fraud_engine.utils.logging import configure_logging, get_logger
 
+# Null-rate above which a column is flagged on the summary card. The
+# 50% cut is conventional for IEEE-CIS reviews; columns above it are
+# candidates for either drop or a "missing as signal" indicator.
+_HIGH_NULL_THRESHOLD: float = 0.5
+
 
 @dataclass(frozen=True)
 class Summary:
@@ -108,7 +113,7 @@ def _compute_summary(merged: pd.DataFrame) -> Summary:
         fraud_rate_overall=float(merged["isFraud"].mean()),
         fraud_rate_by_product={str(k): float(v) for k, v in fraud_by_product.items()},
         identity_coverage=coverage,
-        cols_above_50pct_null=int((null_rate > 0.5).sum()),
+        cols_above_50pct_null=int((null_rate > _HIGH_NULL_THRESHOLD).sum()),
     )
 
 

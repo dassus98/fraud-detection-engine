@@ -17,11 +17,24 @@ import pandas as pd
 import pytest
 
 from fraud_engine.config.settings import Settings, get_settings
+from fraud_engine.utils.seeding import set_all_seeds
 
 # Stable constants for fixture data. Extracted so tests can import them
 # if they need to assert on fixture shape without reinstantiating it.
 _N_ROWS_SMALL: int = 20
 _FIXTURE_SEED: int = 42
+
+
+@pytest.fixture(autouse=True)
+def _seed_everything() -> None:
+    """Seed every RNG before each test so assertions stay reproducible.
+
+    Autouse so test authors never have to remember to call this. The
+    cost is a single `set_all_seeds(42)` invocation per test (~1ms),
+    which is trivial compared with the debugging time saved when a
+    flaky test surfaces only on certain machines.
+    """
+    set_all_seeds(_FIXTURE_SEED)
 
 
 @pytest.fixture
@@ -110,6 +123,40 @@ def small_transactions_df() -> pd.DataFrame:
             # at small N. Real prevalence is ~0.5-2%; Sprint 2 tests must use
             # realistic rates.
             "is_fraud": rng.choice([0, 1], size=_N_ROWS_SMALL, p=[0.85, 0.15]).astype(int),
+        }
+    )
+
+
+@pytest.fixture
+def tiny_transactions_df() -> pd.DataFrame:
+    """Return 20 IEEE-CIS-shaped transaction rows for feature tests.
+
+    Matches the real merged-frame columns Sprint 2+ will operate on
+    (`TransactionID`, `TransactionDT`, `TransactionAmt`, `isFraud`,
+    `ProductCD`, `card1`, `addr1`, `P_emaildomain`). The `small_*`
+    fixtures above use fictional e-commerce column names and predate
+    the IEEE-CIS schema confirmation; prefer this fixture for any test
+    exercising production-shaped data. Determinism comes from the
+    autouse `_seed_everything` fixture that runs first.
+
+    Returns:
+        DataFrame with 20 rows, 2 fraud, hourly TransactionDT spacing.
+    """
+    return pd.DataFrame(
+        {
+            "TransactionID": range(1000, 1000 + _N_ROWS_SMALL),
+            "TransactionDT": np.arange(_N_ROWS_SMALL) * 3600.0,
+            "TransactionAmt": np.random.uniform(10, 500, _N_ROWS_SMALL),
+            # 2 fraud / 20 = 10% — high for IEEE-CIS (~3.5%) but keeps
+            # the class present under small N for tests that stratify.
+            "isFraud": [0] * 18 + [1, 1],
+            "ProductCD": ["W"] * 15 + ["C"] * 3 + ["H"] * 2,
+            "card1": np.random.randint(1000, 9999, _N_ROWS_SMALL),
+            "addr1": np.random.choice([100, 200, 300], _N_ROWS_SMALL),
+            "P_emaildomain": np.random.choice(
+                ["gmail.com", "yahoo.com", "protonmail.com", None],
+                _N_ROWS_SMALL,
+            ),
         }
     )
 

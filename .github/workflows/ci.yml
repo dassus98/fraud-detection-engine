@@ -52,3 +52,16 @@ jobs:
 
       - name: Verify bootstrap
         run: uv run python scripts/verify_bootstrap.py
+
+      # Codecov upload stays wired but disabled until CODECOV_TOKEN is
+      # added to the repository's GitHub Actions secrets. To enable:
+      #   1. Add CODECOV_TOKEN to repo secrets (Settings → Secrets).
+      #   2. Swap `--no-cov` for `--cov --cov-report=xml` in the Pytest step.
+      #   3. Delete the `if: ${{ false }}` guard below.
+      - name: Upload coverage to Codecov
+        if: ${{ false }}
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: false

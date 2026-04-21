@@ -48,6 +48,11 @@ from fraud_engine.config.settings import get_settings
 # (PSI docstring, test assertions) so it lives as a module constant.
 _PSI_EPSILON: float = 1e-4
 
+# Minimum distinct quantile edges that yield a meaningful PSI. One edge
+# (i.e. every baseline value identical) collapses to a single bin,
+# which makes the drift computation trivially zero.
+_MIN_QUANTILE_EDGES: int = 2
+
 
 def economic_cost(
     y_true: ArrayLike,
@@ -258,7 +263,7 @@ def compute_psi(
         q=np.linspace(0, 1, bins + 1),
     )
     quantile_edges = np.unique(quantile_edges)
-    if len(quantile_edges) < 2:
+    if len(quantile_edges) < _MIN_QUANTILE_EDGES:
         # Degenerate baseline — single value everywhere. No meaningful
         # PSI can be computed; treat as zero drift.
         return 0.0
@@ -290,8 +295,7 @@ def compute_psi(
         ]
     )
 
-    psi = float(((current_frac - baseline_frac) * np.log(current_frac / baseline_frac)).sum())
-    return psi
+    return float(((current_frac - baseline_frac) * np.log(current_frac / baseline_frac)).sum())
 
 
 __all__ = [

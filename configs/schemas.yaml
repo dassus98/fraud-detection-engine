@@ -37,3 +37,16 @@ schemas:
       Contract for the left-joined transaction ⟕ identity frame.
       Transaction-side required columns survive; identity-side columns
       are optional (coverage ≈ 24%).
+  split_manifest:
+    version: 1
+    module: fraud_engine.data.splits
+    symbol: _MANIFEST_SCHEMA_VERSION
+    description: >
+      Persisted shape of `SplitFrames.manifest` (Sprint 1). Keys:
+      schema_version, transaction_dt_anchor_iso, train_end_dt,
+      val_end_dt, seed, n_original/n_train/n_val/n_test,
+      fraud_rate_overall/train/val/test, min/max_transaction_dt.
+      Written by `write_split_manifest` to
+      data/interim/splits_manifest.json. Sprint 2's feature pipeline
+      and Sprint 4's evaluator both read this file to confirm they
+      are scoring on the same partition the baseline used.

@@ -21,7 +21,7 @@ dependencies = [
   "pyarrow==19.0.0",
   "pydantic==2.10.4",
   "pydantic-settings==2.7.1",
-  "pandera==0.22.1",
+  "pandera[io]==0.22.1",
   "structlog==25.1.0",
   "click==8.1.8",
   "python-dotenv==1.0.1",
@@ -34,11 +34,19 @@ dependencies = [
   "torch==2.5.1",
   "torch-geometric==2.6.1",
   "networkx==3.4.2",
+  # --- plotting / stats (Sprint 1 notebook imports these explicitly;
+  # transitive via sklearn/shap but pinned here so --nbmake runs
+  # deterministically across environments) ---
+  "matplotlib==3.10.0",
+  "seaborn==0.13.2",
+  "scipy==1.15.0",
+  "joblib==1.4.2",
   # --- serving ---
   "fastapi==0.115.6",
   "uvicorn[standard]==0.34.0",
   "redis==5.2.1",
   "httpx==0.28.1",
+  "asyncpg==0.30.0",
   # --- monitoring ---
   "prometheus-client==0.21.1",
   "mlflow==3.11.1",
@@ -62,6 +70,7 @@ dev = [
   "nbmake==1.5.5",
   "pandas-stubs==2.2.3.241126",
   "types-click==7.1.8",
+  "ydata-profiling==4.18.1",
 ]
 
 [tool.hatch.build.targets.wheel]

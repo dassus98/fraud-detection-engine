@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help install format lint typecheck test test-fast test-integration \
-        test-lineage nb-test data-download data-profile train serve \
-        docker-up docker-down docker-ps clean
+        test-lineage nb-test data-download data-profile sprint1-baseline \
+        train serve docker-up docker-down docker-ps clean
 
 # Load .env so API_HOST / API_PORT flow into `make serve`.
 # Uses `-include` so the target doesn't break before `.env` is created.
@@ -45,6 +45,9 @@ data-download:  ## Fetch IEEE-CIS from Kaggle into data/raw/ and write the manif
 
 data-profile:  ## Render reports/raw_profile.{html,json} from the merged raw frame.
 	uv run python scripts/profile_raw.py
+
+sprint1-baseline:  ## Fit the Sprint 1 LightGBM baseline (random + temporal) on the full dataset.
+	uv run python scripts/run_sprint1_baseline.py
 
 train:  ## Train models. Implemented in Sprint 3.
 	@echo "train: implemented in Sprint 3"; exit 1

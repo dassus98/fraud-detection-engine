@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import inspect
 import logging
 import sys
 import time
@@ -176,7 +177,11 @@ def configure_logging(
     Raises:
         OSError: If `log_dir/pipeline_name` can't be created.
     """
-    global _CONFIGURED
+    # `_CONFIGURED` is a module-level sentinel flipped exactly once per
+    # process so `get_logger()` knows the handlers are already wired.
+    # A module-level class-with-classvar would rename but not remove the
+    # global; idiomatic for a configure-once helper.
+    global _CONFIGURED  # noqa: PLW0603
 
     settings = get_settings()
     effective_run_id = run_id or new_run_id()
@@ -254,7 +259,7 @@ def get_logger(name: str, **initial_values: Any) -> BoundLogger:
     return logger  # type: ignore[no-any-return]
 
 
-def _describe(value: Any) -> dict[str, Any]:
+def _describe(value: Any) -> dict[str, Any]:  # noqa: PLR0911 — one return per shape branch keeps this readable
     """Return a small, JSON-safe shape summary of `value`.
 
     Used by `log_call` so logs carry "what went in and what came out"
@@ -371,11 +376,17 @@ def log_call(fn: Callable[_P, _R]) -> Callable[_P, _R]:
         - `{qualname}.failed` — raised exception type / message +
           `duration_ms`, then the exception is re-raised.
 
+    Works on both sync and async callables: `inspect.iscoroutinefunction`
+    picks the branch, so a coroutine's `await fn(...)` duration is the
+    number reported on `.done`, not the sub-microsecond time to build
+    the coroutine object.
+
     Business rationale:
         CLAUDE.md §5.5 mandates that every function touching data logs
         input shape, output shape, and duration. Writing that by hand
         on every function drifts; a decorator keeps the discipline
-        mechanical and consistent.
+        mechanical and consistent. Sprint 5's FastAPI handlers are
+        `async def`, so async support is a hard requirement.
 
     Trade-offs considered:
         - The decorator only peeks at `.shape` / `__len__` / `Path`,
@@ -388,42 +399,74 @@ def log_call(fn: Callable[_P, _R]) -> Callable[_P, _R]:
         - Exceptions are logged then re-raised. Swallowing them would
           mask failures; eating and returning `None` would be worse
           still.
+        - Two physical wrappers (sync + async) rather than one
+          always-async adapter — keeps the sync path synchronous so
+          callers don't silently need an event loop.
 
     Args:
         fn: The callable to wrap. Methods work too — `self` shows up
-            in the shape log as an opaque object.
+            in the shape log as an opaque object. Coroutine functions
+            are detected via `inspect.iscoroutinefunction`.
 
     Returns:
-        A wrapped callable with the same signature as `fn`.
+        A wrapped callable with the same signature as `fn`. Async `fn`
+        returns an async wrapper; sync `fn` returns a sync wrapper.
     """
 
-    @functools.wraps(fn)
-    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+    event = fn.__qualname__
+
+    def _start_log(args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
         logger = get_logger(fn.__module__)
-        event = fn.__qualname__
         shapes: dict[str, Any] = {f"arg_{i}": _describe(a) for i, a in enumerate(args)}
         shapes.update({f"kw_{k}": _describe(v) for k, v in kwargs.items()})
         logger.info(f"{event}.start", **shapes)
 
-        start = time.perf_counter()
-        try:
-            result = fn(*args, **kwargs)
-        except Exception as exc:
-            duration_ms = (time.perf_counter() - start) * 1000.0
-            logger.error(
-                f"{event}.failed",
-                duration_ms=round(duration_ms, 3),
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-            )
-            raise
-
+    def _done_log(result: Any, start: float) -> None:
         duration_ms = (time.perf_counter() - start) * 1000.0
-        logger.info(
+        get_logger(fn.__module__).info(
             f"{event}.done",
             duration_ms=round(duration_ms, 3),
             result=_describe(result),
         )
+
+    def _failed_log(exc: BaseException, start: float) -> None:
+        duration_ms = (time.perf_counter() - start) * 1000.0
+        # `exc_info=True` lets structlog's `format_exc_info` processor
+        # render the full traceback into the record.
+        get_logger(fn.__module__).error(
+            f"{event}.failed",
+            duration_ms=round(duration_ms, 3),
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            exc_info=True,
+        )
+
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def async_wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+            _start_log(args, kwargs)
+            start = time.perf_counter()
+            try:
+                result = await fn(*args, **kwargs)
+            except Exception as exc:
+                _failed_log(exc, start)
+                raise
+            _done_log(result, start)
+            return result  # type: ignore[no-any-return]
+
+        return async_wrapper  # type: ignore[return-value]
+
+    @functools.wraps(fn)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        _start_log(args, kwargs)
+        start = time.perf_counter()
+        try:
+            result = fn(*args, **kwargs)
+        except Exception as exc:
+            _failed_log(exc, start)
+            raise
+        _done_log(result, start)
         return result
 
     return wrapper
@@ -435,7 +478,8 @@ def _configure_fallback() -> None:
     Emits JSON to stderr. No file handler (no `run_id` yet). Called
     once, on first `get_logger()` if `configure_logging()` wasn't run.
     """
-    global _CONFIGURED
+    # Same once-per-process sentinel; see the note on configure_logging.
+    global _CONFIGURED  # noqa: PLW0603
 
     shared = _shared_processors()
     structlog.configure(

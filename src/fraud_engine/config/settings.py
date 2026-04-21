@@ -29,7 +29,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Project root — discovered relative to this file so Settings works no
@@ -86,8 +86,11 @@ class Settings(BaseSettings):
     )
 
     # --- economic costs (drive thresholding in Sprint 4) ------------
+    # `ge=0.0` on each: negative costs are nonsensical and would flip the
+    # sign of the expected-cost objective in Sprint 4's threshold sweep.
     fraud_cost_usd: float = Field(
         default=450.0,
+        ge=0.0,
         description=(
             "Mean marginal cost of a missed fraud (false negative), in "
             "USD. Calibrated from 2024 industry medians for "
@@ -96,6 +99,7 @@ class Settings(BaseSettings):
     )
     fp_cost_usd: float = Field(
         default=35.0,
+        ge=0.0,
         description=(
             "Customer-friction cost of a false positive alert (support "
             "contact, re-auth friction, downstream churn)."
@@ -103,6 +107,7 @@ class Settings(BaseSettings):
     )
     tp_cost_usd: float = Field(
         default=5.0,
+        ge=0.0,
         description=(
             "Operational cost of a true positive — analyst review time "
             "to confirm a flagged transaction."
@@ -231,6 +236,44 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- temporal split (Sprint 1 onwards) --------------------------
+    # IEEE-CIS does not ship a calendar-anchored TransactionDT — Kaggle
+    # publishes seconds since an anonymised reference. 2017-12-01 UTC
+    # is the community-standard anchor; this is a convention, not a
+    # Kaggle-supplied fact. Recorded here so every later stage
+    # (feature engineering, evaluation, monitoring) speaks calendar
+    # time consistently.
+    transaction_dt_anchor_iso: str = Field(
+        default="2017-12-01T00:00:00+00:00",
+        description=(
+            "ISO-8601 anchor for TransactionDT=0. Community convention "
+            "for IEEE-CIS; change only if Kaggle re-releases with a "
+            "different anchor. Downstream code parses this with "
+            "datetime.fromisoformat."
+        ),
+    )
+    train_end_dt: int = Field(
+        default=86400 * 121,
+        ge=1,
+        description=(
+            "Upper bound of the train split, in TransactionDT seconds "
+            "since the anchor. Default 10,454,400 = 121 days "
+            "(Dec 2017 + Jan/Feb/Mar 2018). Rows with TransactionDT "
+            "strictly less than this go to train."
+        ),
+    )
+    val_end_dt: int = Field(
+        default=86400 * 151,
+        ge=2,
+        description=(
+            "Upper bound of the val split, in TransactionDT seconds "
+            "since the anchor. Default 13,046,400 = 151 days "
+            "(+ Apr 2018). Rows with TransactionDT in "
+            "[train_end_dt, val_end_dt) go to val; the remainder goes "
+            "to test."
+        ),
+    )
+
     # ---------------------------------------------------------------
     # validators
     # ---------------------------------------------------------------
@@ -248,6 +291,21 @@ class Settings(BaseSettings):
         if normalised not in _VALID_LOG_LEVELS:
             raise ValueError(f"log_level={value!r} is not in {sorted(_VALID_LOG_LEVELS)}")
         return normalised
+
+    @field_validator("val_end_dt")
+    @classmethod
+    def _val_end_after_train_end(cls, value: int, info: ValidationInfo) -> int:
+        """Enforce a non-empty val window.
+
+        Raises:
+            ValueError: If `val_end_dt <= train_end_dt`.
+        """
+        train_end = info.data.get("train_end_dt")
+        if train_end is not None and value <= train_end:
+            raise ValueError(
+                f"val_end_dt={value} must be strictly greater than " f"train_end_dt={train_end}"
+            )
+        return value
 
     # ---------------------------------------------------------------
     # derived paths

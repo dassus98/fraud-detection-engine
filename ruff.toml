@@ -4,14 +4,22 @@ src = ["src", "tests", "scripts"]
 extend-exclude = ["notebooks", "mlruns", "data", "logs"]
 
 [lint]
-select = ["E", "F", "I", "N", "UP", "B", "SIM", "ARG"]
+# RET = flake8-return (early returns, unnecessary else after return)
+# PTH = flake8-use-pathlib (reject os.path in favour of pathlib — CLAUDE.md §5.1)
+# PL  = pylint family (refactor/convention/warning subsets)
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "ARG", "RET", "PTH", "PL"]
 ignore = [
   "E501",  # line length handled by the formatter
 ]
 
 [lint.per-file-ignores]
-# Fixtures as unused args are standard pytest; not a smell.
-"tests/**" = ["ARG001", "ARG002"]
+# Test code idioms that trip PL rules but are universally accepted:
+#   ARG001/002 — fixtures as unused args are standard pytest.
+#   PLR2004   — magic values in assertions (`assert len(x) == 10`) are
+#               the whole point; named-constant refactor hurts readability.
+#   PLR0402   — `import foo.bar as bar` patterns used by
+#               test_metrics.py:147 to assert on re-export surface.
+"tests/**" = ["ARG001", "ARG002", "PLR2004", "PLR0402"]
 # verify_bootstrap uses click.echo for CLI output, which is allowed.
 "scripts/**" = []
 
