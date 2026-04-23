@@ -43,10 +43,12 @@ Usage:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+import re
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import click
 import numpy as np
@@ -61,6 +63,26 @@ from fraud_engine.utils.logging import configure_logging, get_logger
 # 50% cut is conventional for IEEE-CIS reviews; columns above it are
 # candidates for either drop or a "missing as signal" indicator.
 _HIGH_NULL_THRESHOLD: float = 0.5
+
+# Kaggle dataset identifier, pinned so the JSON artefact is
+# self-describing and can be audited against `data/raw/MANIFEST.json`.
+_DATASET_SLUG: Final[str] = "ieee-fraud-detection"
+
+# Column-prefix → canonical group name for the `missingness_pct_by_group`
+# rollup. Order matters: more specific prefixes (`id_`) come before
+# broader single-letter ones (`D`). `_IDENTITY_PREFIX` captures the
+# hyphen-normalised test columns via the underscore form.
+_GROUP_PREFIXES: Final[tuple[tuple[str, str], ...]] = (
+    ("id_", "id_"),
+    ("card", "card"),
+    ("addr", "addr"),
+    ("dist", "dist"),
+    ("V", "V"),
+    ("C", "C"),
+    ("D", "D"),
+    ("M", "M"),
+)
+_GROUP_SINGLE_LETTER: Final[re.Pattern[str]] = re.compile(r"^[VCDM]\d{1,3}$")
 
 
 @dataclass(frozen=True)
@@ -148,6 +170,92 @@ def _unique_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
             )
     out.sort(key=lambda row: row["n_unique"], reverse=True)
     return out
+
+
+def _missingness_pct_by_group(df: pd.DataFrame) -> dict[str, float]:
+    """Aggregate null rate across the canonical IEEE-CIS column groups.
+
+    Columns that do not match any known group (e.g. TransactionID,
+    isFraud, DeviceType) are excluded so the rollup reports genuine
+    feature-family coverage rather than noise from the core columns.
+
+    Args:
+        df: The merged DataFrame.
+
+    Returns:
+        Mapping of group name → mean null fraction across that group's
+        columns, rounded to 4 decimal places. Empty groups are omitted.
+    """
+    buckets: dict[str, list[float]] = {name: [] for _, name in _GROUP_PREFIXES}
+    null_rate = df.isna().mean()
+    for col in df.columns:
+        s = str(col)
+        for prefix, group in _GROUP_PREFIXES:
+            if s.startswith(prefix) and (len(prefix) > 1 or _GROUP_SINGLE_LETTER.match(s)):
+                buckets[group].append(float(null_rate[col]))
+                break
+    return {group: round(float(np.mean(vals)), 4) for group, vals in buckets.items() if vals}
+
+
+def _table_meta(df: pd.DataFrame) -> dict[str, float | int]:
+    """Return rows / cols / memory_mb for one table, spec-keyed.
+
+    Args:
+        df: Any loaded table (transactions, identity, merged).
+
+    Returns:
+        Dict with keys `rows`, `cols`, `memory_mb`.
+    """
+    return {
+        "rows": int(df.shape[0]),
+        "cols": int(df.shape[1]),
+        "memory_mb": round(df.memory_usage(deep=True).sum() / (1024**2), 2),
+    }
+
+
+def _build_spec_json(
+    *,
+    summary: Summary,
+    transactions: pd.DataFrame,
+    identity: pd.DataFrame,
+    merged: pd.DataFrame,
+) -> dict[str, Any]:
+    """Shape the summary into the prompt 0.2.d JSON contract.
+
+    The contract from the prompt nests every per-split metric under a
+    top-level `train` key, alongside a `generated_at` ISO timestamp and
+    the dataset slug. This lets future test / production splits be
+    added as peer keys without reshaping the file.
+
+    Args:
+        summary: Existing `Summary` dataclass for overall indicators.
+        transactions: Train transaction frame (un-optimised).
+        identity: Train identity frame (un-optimised).
+        merged: Merged train frame (un-optimised).
+
+    Returns:
+        A JSON-serialisable dict matching the prompt contract.
+    """
+    merged_meta = _table_meta(merged)
+    merged_meta["identity_coverage_pct"] = round(summary.identity_coverage * 100.0, 2)
+    return {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "dataset": _DATASET_SLUG,
+        "schema_version": summary.schema_version,
+        "train": {
+            "transactions": _table_meta(transactions),
+            "identity": _table_meta(identity),
+            "merged": merged_meta,
+            "fraud_rate": round(summary.fraud_rate_overall, 6),
+            "fraud_rate_by_productcd": {
+                str(k): round(float(v), 6) for k, v in sorted(summary.fraud_rate_by_product.items())
+            },
+            "timespan_seconds": int(summary.tx_dt_max - summary.tx_dt_min),
+            "timespan_days": summary.tx_dt_span_days,
+            "missingness_pct_by_group": _missingness_pct_by_group(merged),
+            "cols_above_50pct_null": summary.cols_above_50pct_null,
+        },
+    }
 
 
 def _numeric_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
@@ -344,23 +452,30 @@ def _render_html(
 @click.command()
 @click.option(
     "--reports-dir",
-    type=click.Path(file_okay=False, path_type=Path),
+    "reports_dir",
+    type=click.Path(file_okay=False, dir_okay=True),
     default=None,
     help="Override the output directory. Defaults to <repo>/reports.",
 )
-def profile(reports_dir: Path | None) -> None:
+def profile(reports_dir: str | None) -> None:
     """Generate reports/raw_profile.html and raw_profile_summary.json."""
     settings = get_settings()
     configure_logging(pipeline_name="profile_raw")
     logger = get_logger(__name__)
 
-    target_dir = reports_dir or (settings.data_dir.parent / "reports")
+    target_dir = (
+        Path(reports_dir) if reports_dir is not None else settings.data_dir.parent / "reports"
+    )
     target_dir.mkdir(parents=True, exist_ok=True)
     html_path = target_dir / "raw_profile.html"
     json_path = target_dir / "raw_profile_summary.json"
 
     loader = RawDataLoader(settings=settings)
-    logger.info("profile.load_merged", raw_dir=str(loader.raw_dir))
+    logger.info("profile.load", raw_dir=str(loader.raw_dir))
+    # Per-table loads feed the spec's nested JSON shape (rows/cols/memory
+    # per frame); the merged frame drives every downstream aggregation.
+    transactions = loader.load_transactions(optimize=False)
+    identity = loader.load_identity(optimize=False)
     merged = loader.load_merged(optimize=False)
 
     logger.info("profile.compute", rows=int(merged.shape[0]), cols=int(merged.shape[1]))
@@ -373,8 +488,14 @@ def profile(reports_dir: Path | None) -> None:
         _render_html(summary, missingness, uniques, numerics),
         encoding="utf-8",
     )
+    spec_json = _build_spec_json(
+        summary=summary,
+        transactions=transactions,
+        identity=identity,
+        merged=merged,
+    )
     json_path.write_text(
-        json.dumps(asdict(summary), indent=2) + "\n",
+        json.dumps(spec_json, indent=2) + "\n",
         encoding="utf-8",
     )
 

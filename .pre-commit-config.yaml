@@ -31,7 +31,10 @@ repos:
     hooks:
       - id: detect-secrets
         args: ["--baseline", ".secrets.baseline"]
-        exclude: '^(uv\.lock|\.env\.example)$'
+        # uv.lock and .env.example are intentional false-positive sources.
+        # sprints/ reports always contain hex run-ids, SHA-256 checksums,
+        # and structured-log excerpts — never real secrets.
+        exclude: '^(uv\.lock|\.env\.example)$|^sprints/'
 
   - repo: local
     hooks:

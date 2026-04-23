@@ -46,7 +46,7 @@ import click
 
 from fraud_engine.config.settings import Settings, get_settings
 from fraud_engine.schemas.raw import SCHEMA_VERSION
-from fraud_engine.utils.logging import configure_logging, get_logger
+from fraud_engine.utils.logging import configure_logging, get_logger, log_call
 
 _COMPETITION_SLUG: Final[str] = "ieee-fraud-detection"
 _EXPECTED_FILES: Final[tuple[str, ...]] = (
@@ -219,11 +219,20 @@ def _write_manifest(raw_dir: Path, fingerprints: dict[str, FileFingerprint]) -> 
     default=False,
     help="Ignore manifest and re-download even if hashes already match.",
 )
-def download(force: bool) -> None:
+@click.option(
+    "--output-dir",
+    "output_dir",
+    type=click.Path(file_okay=False, dir_okay=True),
+    default=None,
+    help="Override settings.raw_dir. Created if missing.",
+)
+@log_call
+def main(force: bool, output_dir: str | None) -> None:
     """Acquire the IEEE-CIS raw CSVs and write a SHA256 manifest."""
     settings = get_settings()
     settings.ensure_directories()
-    raw_dir = settings.raw_dir
+    raw_dir = Path(output_dir) if output_dir is not None else settings.raw_dir
+    raw_dir.mkdir(parents=True, exist_ok=True)
 
     run_id = configure_logging(pipeline_name="data_download")
     logger = get_logger(__name__)
@@ -279,4 +288,4 @@ def download(force: bool) -> None:
 
 
 if __name__ == "__main__":
-    download()
+    main()

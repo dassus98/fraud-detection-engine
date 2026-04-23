@@ -123,3 +123,57 @@ def test_optimize_reduces_memory(loader_with_synthetic_tree: RawDataLoader) -> N
     assert opt_bytes < raw_bytes
     # Float columns should downcast to float32.
     assert opt["TransactionAmt"].dtype.itemsize == 4
+
+
+@pytest.fixture
+def loader_with_test_split_tree(tmp_path: Path) -> RawDataLoader:
+    """Build a loader pointing at a synthetic test-split tree.
+
+    Test-split CSVs differ from train in two ways: (1) `isFraud` is
+    absent from `test_transaction.csv`, (2) `test_identity.csv` uses
+    hyphenated `id-XX` column names rather than `id_XX`. The loader
+    must handle both transparently.
+    """
+    raw_dir = tmp_path / "data" / "raw"
+    raw_dir.mkdir(parents=True)
+    tx = _minimal_transaction_df().drop(columns=["isFraud"])
+    tx.to_csv(raw_dir / "test_transaction.csv", index=False)
+    idt = _minimal_identity_df().rename(
+        columns={"id_01": "id-01", "id_12": "id-12"},
+    )
+    idt.to_csv(raw_dir / "test_identity.csv", index=False)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        models_dir=tmp_path / "models",
+        logs_dir=tmp_path / "logs",
+    )
+    return RawDataLoader(raw_dir=raw_dir, settings=settings)
+
+
+def test_load_test_transactions_drops_isfraud_requirement(
+    loader_with_test_split_tree: RawDataLoader,
+) -> None:
+    """Test-split transactions lack `isFraud` and must still validate."""
+    df = loader_with_test_split_tree.load_transactions("test", optimize=False)
+    assert "isFraud" not in df.columns
+    assert df.shape[0] == 5
+
+
+def test_load_test_identity_normalises_hyphenated_columns(
+    loader_with_test_split_tree: RawDataLoader,
+) -> None:
+    """Kaggle's `id-XX` column names are rewritten to `id_XX` on load."""
+    df = loader_with_test_split_tree.load_identity("test", optimize=False)
+    assert "id_01" in df.columns
+    assert "id_12" in df.columns
+    assert not any(col.startswith("id-") for col in df.columns)
+
+
+def test_load_test_merged_omits_isfraud(
+    loader_with_test_split_tree: RawDataLoader,
+) -> None:
+    """Merged test frame validates against the label-free schema."""
+    merged = loader_with_test_split_tree.load_merged("test", optimize=False)
+    assert "isFraud" not in merged.columns
+    assert merged.shape[0] == 5
+    assert merged["TransactionID"].is_unique

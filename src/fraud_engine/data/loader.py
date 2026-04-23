@@ -33,12 +33,14 @@ Trade-offs considered:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import numpy as np
 import pandas as pd
+from pandera import DataFrameSchema
 
 from fraud_engine.config.settings import Settings, get_settings
 from fraud_engine.schemas.raw import (
@@ -49,8 +51,24 @@ from fraud_engine.schemas.raw import (
 )
 from fraud_engine.utils.logging import get_logger, log_call
 
-_TRANSACTION_FILENAME: Final[str] = "train_transaction.csv"
-_IDENTITY_FILENAME: Final[str] = "train_identity.csv"
+Split = Literal["train", "test"]
+
+# IEEE-CIS ships train / test under the same directory with different
+# filename prefixes. Keying by split lets the public API accept the
+# mnemonic string without leaking filesystem details.
+_TRANSACTION_FILENAME_BY_SPLIT: Final[dict[Split, str]] = {
+    "train": "train_transaction.csv",
+    "test": "test_transaction.csv",
+}
+_IDENTITY_FILENAME_BY_SPLIT: Final[dict[Split, str]] = {
+    "train": "train_identity.csv",
+    "test": "test_identity.csv",
+}
+
+# Kaggle's test_identity.csv release used hyphens (`id-01`) instead of
+# underscores (`id_01`); the train release uses underscores. We
+# normalise test columns so the same pandera schema validates both.
+_IDENTITY_HYPHEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^id-(\d{2})$")
 
 # Heuristic for object→category promotion. 0.5 keeps high-cardinality
 # ID-like columns as object (unique ratio approaches 1) while promoting
@@ -122,10 +140,18 @@ class RawDataLoader:
     # ------------------------------------------------------------------
 
     @log_call
-    def load_transactions(self, *, optimize: bool = True) -> pd.DataFrame:
-        """Read and validate `train_transaction.csv`.
+    def load_transactions(
+        self,
+        split: Split = "train",
+        *,
+        optimize: bool = True,
+    ) -> pd.DataFrame:
+        """Read and validate the transaction CSV for `split`.
 
         Args:
+            split: Which partition to load. "train" includes the
+                `isFraud` label; "test" does not (Kaggle holds it out
+                for scoring).
             optimize: If True (default), apply dtype optimisation after
                 schema validation. Turn off if a downstream consumer
                 needs the raw float64 shape (e.g. bit-for-bit fidelity
@@ -133,49 +159,62 @@ class RawDataLoader:
 
         Returns:
             A DataFrame of 590,540 rows × 394 cols on the stock Kaggle
-            snapshot.
+            train snapshot; 506,691 rows × 393 cols on test.
 
         Raises:
-            FileNotFoundError: If `train_transaction.csv` is missing.
-            pandera.errors.SchemaErrors: If the file violates
-                `TransactionSchema`.
+            FileNotFoundError: If the split's transaction CSV is missing.
+            pandera.errors.SchemaErrors: If the file violates the
+                split's transaction schema.
         """
-        path = self.raw_dir / _TRANSACTION_FILENAME
+        path = self.raw_dir / _TRANSACTION_FILENAME_BY_SPLIT[split]
         df = self._read_csv(path)
-        TransactionSchema.validate(df, lazy=True)
+        self._transaction_schema(split).validate(df, lazy=True)
         if optimize:
             df = self._optimize(df)
-        self._emit_report(name="transactions", df=df)
+        self._emit_report(name=f"transactions.{split}", df=df)
         return df
 
     @log_call
-    def load_identity(self, *, optimize: bool = True) -> pd.DataFrame:
-        """Read and validate `train_identity.csv`.
+    def load_identity(
+        self,
+        split: Split = "train",
+        *,
+        optimize: bool = True,
+    ) -> pd.DataFrame:
+        """Read and validate the identity CSV for `split`.
 
         Args:
+            split: Which partition to load.
             optimize: If True (default), apply dtype optimisation after
                 schema validation.
 
         Returns:
-            A DataFrame of ~144k rows × 41 cols on the stock Kaggle
-            snapshot (identity coverage is ~24% of transactions).
+            A DataFrame of ~144k rows × 41 cols on the train snapshot;
+            ~141k rows × 41 cols on test.
 
         Raises:
-            FileNotFoundError: If `train_identity.csv` is missing.
+            FileNotFoundError: If the split's identity CSV is missing.
             pandera.errors.SchemaErrors: If the file violates
                 `IdentitySchema`.
         """
-        path = self.raw_dir / _IDENTITY_FILENAME
+        path = self.raw_dir / _IDENTITY_FILENAME_BY_SPLIT[split]
         df = self._read_csv(path)
+        if split == "test":
+            df = self._normalise_test_identity_columns(df)
         IdentitySchema.validate(df, lazy=True)
         if optimize:
             df = self._optimize(df)
-        self._emit_report(name="identity", df=df)
+        self._emit_report(name=f"identity.{split}", df=df)
         return df
 
     @log_call
-    def load_merged(self, *, optimize: bool = True) -> pd.DataFrame:
-        """Left-join identity onto transactions and validate.
+    def load_merged(
+        self,
+        split: Split = "train",
+        *,
+        optimize: bool = True,
+    ) -> pd.DataFrame:
+        """Left-join identity onto transactions for `split` and validate.
 
         Left-join semantics match production: every transaction appears
         in the output; identity columns are NaN where coverage is
@@ -183,6 +222,7 @@ class RawDataLoader:
         Sprint 2+ consumes.
 
         Args:
+            split: Which partition to merge.
             optimize: If True (default), apply dtype optimisation on
                 the merged frame. Sub-frames are loaded *un-optimised*
                 internally so the join on integer keys is lossless.
@@ -193,10 +233,10 @@ class RawDataLoader:
         Raises:
             ValueError: If TransactionID is not unique in either side.
             pandera.errors.SchemaErrors: If the merged shape violates
-                `MergedSchema`.
+                the split's merged schema.
         """
-        tx = self.load_transactions(optimize=False)
-        idt = self.load_identity(optimize=False)
+        tx = self.load_transactions(split, optimize=False)
+        idt = self.load_identity(split, optimize=False)
         merged = tx.merge(
             idt,
             on="TransactionID",
@@ -204,13 +244,11 @@ class RawDataLoader:
             validate="one_to_one",
         )
         if len(merged) != len(tx):
-            raise ValueError(
-                f"Left-join row-count drift: tx={len(tx)}, merged={len(merged)}"
-            )
-        MergedSchema.validate(merged, lazy=True)
+            raise ValueError(f"Left-join row-count drift: tx={len(tx)}, merged={len(merged)}")
+        self._merged_schema(split).validate(merged, lazy=True)
         if optimize:
             merged = self._optimize(merged)
-        self._emit_report(name="merged", df=merged)
+        self._emit_report(name=f"merged.{split}", df=merged)
         return merged
 
     # ------------------------------------------------------------------
@@ -253,6 +291,64 @@ class RawDataLoader:
             memory_mb=report.memory_mb,
             schema_version=report.schema_version,
         )
+
+    @staticmethod
+    def _transaction_schema(split: Split) -> DataFrameSchema:
+        """Return the transaction schema appropriate for `split`.
+
+        Train carries `isFraud`; test does not. Instead of defining two
+        full schemas, we derive the test variant by stripping the one
+        label column from the train schema so the contract stays
+        DRY across splits.
+
+        Args:
+            split: Which partition is being validated.
+
+        Returns:
+            The train schema (unchanged) or a shallow copy with
+            `isFraud` removed for test.
+        """
+        if split == "train":
+            return TransactionSchema
+        return TransactionSchema.remove_columns(["isFraud"])
+
+    @staticmethod
+    def _merged_schema(split: Split) -> DataFrameSchema:
+        """Return the merged schema appropriate for `split`.
+
+        Args:
+            split: Which partition is being validated.
+
+        Returns:
+            `MergedSchema` (train) or a label-free derivative (test).
+        """
+        if split == "train":
+            return MergedSchema
+        return MergedSchema.remove_columns(["isFraud"])
+
+    @staticmethod
+    def _normalise_test_identity_columns(df: pd.DataFrame) -> pd.DataFrame:
+        """Rename Kaggle's test-identity `id-XX` columns to `id_XX`.
+
+        The train / test identity CSVs disagree on a single character
+        in the `id_*` column names — a known Kaggle release quirk.
+        Normalising here means `IdentitySchema` (and every downstream
+        consumer) sees the same shape regardless of split.
+
+        Args:
+            df: The raw test-identity DataFrame, freshly read from CSV.
+
+        Returns:
+            A DataFrame with columns renamed in-place.
+        """
+        rename_map: dict[str, str] = {}
+        for col in df.columns:
+            match = _IDENTITY_HYPHEN_PATTERN.match(str(col))
+            if match:
+                rename_map[col] = f"id_{match.group(1)}"
+        if rename_map:
+            df = df.rename(columns=rename_map)
+        return df
 
     @staticmethod
     def _optimize(df: pd.DataFrame) -> pd.DataFrame:
