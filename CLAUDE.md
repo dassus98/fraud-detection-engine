@@ -14,25 +14,49 @@ A previous iteration of this project exists on the `archive/v1-original` branch 
 
 ## 2. Critical Rules — Version Control
 
-**Claude Code must not execute any git commands. None. No exceptions.**
+**The agent's git/gh authority is scoped to the PR-plumbing carve-out in §2.1. Everything else is forbidden.** When in doubt, don't run a git/gh command — write the completion report and hand the task back to John.
 
-This includes (non-exhaustive):
+### 2.1 Allowed (the carve-out)
 
-- `git add`, `git commit`, `git push`, `git pull`, `git fetch`, `git merge`, `git rebase`
-- `git checkout`, `git switch`, `git branch`, `git tag`, `git stash`
-- `git reset`, `git revert`, `git restore`
-- `git rm` (use plain `rm` for filesystem deletes that aren't tracked, otherwise wait for John)
-- `git clean`, `git filter-repo`, `git submodule`
-- `gh` CLI commands of any kind
-- Any shell pipeline that ends in a git or gh command
+- `git checkout -b sprint-<N>/prompt-<X>-<Y>-<slug>` — create the feature branch off the current `main`. Naming per [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) §1.1.
+- `git push -u origin <feature-branch>` — push the current feature branch to origin so a PR can be opened. **Never `main`. Never `--force` or `--force-with-lease`.**
+- `gh pr create` — open the PR with the title format and body template from CONTRIBUTING.md §2.1–§2.2.
+- Read-only diagnostics: `git status`, `git log`, `git diff`, `git branch --show-current`, `gh pr view`, `gh pr list`, `gh pr checks`. These don't change state and can be run freely.
 
-**Why this rule exists:** John handles all version control manually. He is responsible for commit boundaries, commit messages, branch state, tag placement, and remote pushes. Claude Code making unsolicited commits has historically created merge conflicts, polluted history with uninstructive messages, and forced rewrite operations that lose work.
+### 2.2 Forbidden (the rule)
 
-**What to do instead:** When a task is complete, write a completion report (`sprints/sprint_X/prompt_Y_report.md`) summarizing what was built and what was tested. State explicitly: "Ready for John to commit." Then stop. Do not stage. Do not commit. Do not suggest a commit message unless asked.
+Everything outside §2.1, including:
 
-**What is allowed:** Reading git state for diagnostic purposes is fine if Claude Code needs to (e.g., `git status` output read from a terminal John shares). But Claude Code does not run those reads itself. If Claude Code needs to know git state, ask John.
+- `git add`, `git commit`, `git commit --amend` — staging and commit authorship belong to John. Pre-commit hooks have historically misbehaved with mixed staged/unstaged trees, and commit messages are part of the portfolio's `git log --oneline main`.
+- `git push --force`, `git push --force-with-lease`, any push to `main`.
+- `git merge`, `git rebase`, `git pull` (which can rebase/merge), `git cherry-pick`.
+- `git reset --hard`, `git revert`, `git restore`, `git clean`.
+- `git tag`, `git stash`, `git rm`, `git filter-repo`, `git submodule`, `git checkout <existing-branch>` (use only `-b` to create new), `git switch`.
+- `gh pr merge`, `gh pr close --delete-branch`, `gh release` of any kind.
+- Any shell pipeline whose tail end is one of the above.
 
-**Bash and other commands are unrestricted** subject to the rest of this document. Run tests, run linters, install packages, build Docker images, modify files, create directories — all fine. Just nothing that touches git or remote repositories.
+### 2.3 Why this shape
+
+John owns the *consequential* operations: he commits (so each commit reflects his review of the staged diff and his message-authorship for the portfolio history), and he merges (so `main` only advances through his explicit action). The agent owns the *mechanical* plumbing in between — branch create, push, PR open. This mirrors how a senior engineer pairs with a reviewer who never touches `main` directly.
+
+Unsolicited commits by Claude have historically produced merge conflicts, uninformative history, and forced rewrites that lose work. Holding the line at "agent never commits, never pushes to main, never merges, never tags" eliminates those failure modes while letting the agent open ~80–100 PRs across the project without paging John for the mechanical parts.
+
+### 2.4 At the end of a prompt
+
+After the work is implemented, tested, and the completion report is written:
+
+1. State: "Verification passed. Ready for John to commit on `<feature-branch>`."
+2. **Wait for John to commit** (and confirm the commit by saying so, or by the working tree going clean — `git status` reads are allowed).
+3. Then `git push -u origin <feature-branch>` and `gh pr create` with the CONTRIBUTING.md §2.2 body template.
+4. State: "PR open at <url>. Ready for John to squash-merge."
+
+If no feature branch exists (Sprint 0's grandfathered single branch, or John ran the prompt on `main` accidentally), do not retroactively create branches over committed work — write the completion report and ask John how to proceed.
+
+The full branching/PR/merge convention lives in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md). Read it every session.
+
+### 2.5 Other commands
+
+**Bash and other commands are unrestricted** subject to the rest of this document. Run tests, run linters, install packages, build Docker images, modify files, create directories — all fine. The carve-out above is *only* for git/gh.
 
 ---
 
@@ -314,7 +338,7 @@ These behaviors look productive but produce worse outcomes. They have happened b
 9. **Premature optimization.** Get correctness first, measure, then optimize. Latency claims without benchmarks are unverified.
 10. **Claiming a sprint complete without running verification.** The verification protocol (section 11) is the gate. No exceptions.
 11. **Reading from `archive/v1-original`.** That branch is portfolio history. The new build is independent. If you find yourself tempted to copy from it, stop and ask John.
-12. **Running git commands.** See section 2. This is the most important rule in this document.
+12. **Running git/gh commands outside the §2.1 carve-out.** Branch create + feature-branch push + `gh pr create` is the entire allowance. No commits, no merges, no force-push, no tags, no switching to existing branches. See section 2.
 
 ---
 
@@ -325,12 +349,13 @@ When John pastes a prompt, follow this procedure:
 ### Before starting work
 
 1. **Read this CLAUDE.md in full.** Even if you read it earlier in the session.
-2. **Read `docs/CONVENTIONS.md`** if it exists (it duplicates parts of this file but may have updates).
-3. **Read the most recent `sprints/sprint_X/prompt_Y_report.md`** to understand current state.
-4. **Read any files the prompt explicitly references.**
-5. **Read `configs/schemas.yaml`** to know current schema versions.
-6. **Read `src/fraud_engine/config/settings.py`** to know current configuration surface.
-7. State explicitly: "I have read CLAUDE.md and the prior completion report. Current state is: [one-sentence summary]. Proceeding with [prompt task]."
+2. **Read `docs/CONTRIBUTING.md` in full.** Branching, PR conventions, and the squash-merge-per-prompt model. Non-negotiable from Sprint 1 onwards.
+3. **Read `docs/CONVENTIONS.md`** if it exists (it duplicates parts of this file but may have updates).
+4. **Read the most recent `sprints/sprint_X/prompt_Y_report.md`** to understand current state.
+5. **Read any files the prompt explicitly references.**
+6. **Read `configs/schemas.yaml`** to know current schema versions.
+7. **Read `src/fraud_engine/config/settings.py`** to know current configuration surface.
+8. State explicitly: "I have read CLAUDE.md, CONTRIBUTING.md, and the prior completion report. Current state is: [one-sentence summary]. Proceeding with [prompt task]."
 
 ### During work
 
@@ -345,8 +370,9 @@ When John pastes a prompt, follow this procedure:
 
 1. Run the full verification protocol (section 11).
 2. Write `sprints/sprint_X/prompt_Y_report.md` with: what was built, files changed, test results, deviations from prompt, anything John should know.
-3. State explicitly: "Verification passed. Ready for John to commit."
-4. Do not run any git commands. Do not suggest a commit message unless asked.
+3. State explicitly: "Verification passed. Ready for John to commit on `<feature-branch>`."
+4. **Wait for John to commit.** Do not stage. Do not commit. Do not suggest a commit message unless asked.
+5. Once John has committed, run the §2.4 push + `gh pr create` sequence and post the PR URL back. Then stop — the merge is John's.
 
 ---
 
@@ -445,6 +471,7 @@ Update this table as sprints complete. Read it at the start of every session.
 If you need information not in this file:
 
 - **Master plan:** `docs/PROJECT_PLAN.md` (the full project plan from the .docx, if converted to markdown)
+- **Branching, PR, and merge conventions:** `docs/CONTRIBUTING.md` (one branch + one PR per prompt, squash-merge to `main`; non-negotiable from Sprint 1 onwards)
 - **Conventions:** `docs/CONVENTIONS.md` (this file's standards section, kept in sync)
 - **Architecture decisions:** `docs/ADR/*.md` (one per major decision)
 - **Data dictionary:** `docs/DATA_DICTIONARY.md` (every feature group, source, meaning)
@@ -460,7 +487,7 @@ If the answer is in none of these and not derivable from code, ask John. Do not 
 
 ## 15. Final Reminders
 
-- **No git commands. Ever.** (Section 2.)
+- **Git/gh: only the §2.1 carve-out.** Branch create + feature-branch push + `gh pr create`. Commits, merges, tags, force-push are John's, every time.
 - **Every Python file starts with `from __future__ import annotations`.**
 - **Every function has a Google-style docstring with business rationale and trade-offs.**
 - **Zero hardcoded values outside config.**
