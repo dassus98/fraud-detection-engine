@@ -2,7 +2,7 @@
 
 These exercise `train_baseline` end-to-end against a 10,000-row
 stratified sample of the real IEEE-CIS merged frame. Full-dataset
-numbers live in `sprints/sprint_1/prompt_1_1_report.md`; the CI
+numbers live in `sprints/sprint_1/prompt_1_1_scaffold_report.md`; the CI
 suite here guards the *shape* of the result — AUC within a defensible
 band, random > temporal, and the shuffled-label leakage check — so
 any refactor of the feature stack or the splitter catches regressions
