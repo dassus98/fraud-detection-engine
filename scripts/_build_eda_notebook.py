@@ -111,10 +111,17 @@ print(f"Loaded merged frame: {merged.shape[0]:,} rows × {merged.shape[1]} cols"
         """
 ## Section A — Data Overview
 
-Row and column counts, memory footprint, dtype histogram. These
-fingerprint the dataset before any transformation — if a future
-re-download changes the shape, the splitter + baseline numbers
-deserve re-running.
+Row and column counts, memory footprint, dtype histogram, calendar
+derivation from `Settings.transaction_dt_anchor_iso`, daily volume,
+identity-join coverage, and the fraud-rate split between rows that
+do vs don't have identity data. Together these fingerprint the
+dataset before any transformation — a future re-download that
+changes any of these fingerprints means the splitter + baseline +
+threshold numbers all deserve re-running.
+
+`event_dt` is computed as a standalone `pd.Series` (not added to
+`merged`) so downstream sections (notably Section F's cleanlab
+classifier) keep their feature-column selection intact.
 """
     ),
     _code(
@@ -131,50 +138,427 @@ print(json.dumps(overview, indent=2))
 attach_artifact(run, overview, name="overview")
 """
     ),
+    _code(
+        """
+# Anchor TransactionDT (anonymised seconds-since-reference) onto the
+# community-standard 2017-12-01 UTC calendar; kept as a standalone
+# Series so we don't pollute `merged` with a datetime column the
+# baseline / cleanlab paths would otherwise pick up as a feature.
+anchor = pd.Timestamp(SETTINGS.transaction_dt_anchor_iso)
+event_dt = anchor + pd.to_timedelta(merged["TransactionDT"], unit="s")
+event_dt.name = "event_dt"
+
+calendar_span = {
+    "anchor_utc": anchor.isoformat(),
+    "min_event_dt": event_dt.min().isoformat(),
+    "max_event_dt": event_dt.max().isoformat(),
+    "n_days_observed": int((event_dt.max().normalize() - event_dt.min().normalize()).days) + 1,
+}
+print(json.dumps(calendar_span, indent=2))
+attach_artifact(run, calendar_span, name="calendar_span")
+"""
+    ),
+    _code(
+        """
+daily_volume = event_dt.dt.date.value_counts().sort_index()
+
+fig, ax = plt.subplots(figsize=(12, 4))
+daily_volume.plot(ax=ax, color="#3b6fb3")
+ax.set_title("Daily transaction volume — IEEE-CIS train (anchor 2017-12-01 UTC)")
+ax.set_xlabel("calendar date")
+ax.set_ylabel("transactions / day")
+fig.autofmt_xdate()
+fig.tight_layout()
+fig.savefig(FIG_DIR / "daily_volume.png", dpi=150, bbox_inches="tight")
+attach_artifact(run, fig, name="daily_volume")
+plt.close(fig)
+print(f"Daily volume range: {int(daily_volume.min()):,} — {int(daily_volume.max()):,} txns/day")
+"""
+    ),
+    _code(
+        """
+# Identity coverage = fraction of rows where any id_* / DeviceType /
+# DeviceInfo column is non-null. ~24% on IEEE-CIS train (see
+# reports/raw_profile_summary.json).
+identity_cols = [
+    c for c in merged.columns if c.startswith("id_") or c in {"DeviceType", "DeviceInfo"}
+]
+has_identity = (
+    merged[identity_cols].notna().any(axis=1)
+    if identity_cols
+    else pd.Series(False, index=merged.index, name="has_identity")
+)
+has_identity.name = "has_identity"
+
+identity_coverage = {
+    "n_identity_columns": len(identity_cols),
+    "n_with_identity": int(has_identity.sum()),
+    "n_without_identity": int((~has_identity).sum()),
+    "coverage_pct": round(float(has_identity.mean()) * 100, 4),
+}
+print(json.dumps(identity_coverage, indent=2))
+attach_artifact(run, identity_coverage, name="identity_coverage")
+"""
+    ),
+    _code(
+        """
+# Vectorised 95% Wilson confidence interval. Used here for
+# has-id-vs-no-id and reused throughout Section B; defining it once
+# at first use keeps the helper visible to the rest of the notebook.
+def wilson_ci(k, n, *, alpha: float = 0.05):
+    \"\"\"Return (low, high) arrays for a 95% Wilson binomial CI.
+
+    n=0 entries return (NaN, NaN). Cheaper than scipy.stats.binomtest
+    in a loop and lines up with how groupby aggregates land — `k` and
+    `n` arrive as same-shape numpy arrays.
+    \"\"\"
+    from scipy.stats import norm
+
+    k_arr = np.asarray(k, dtype=float)
+    n_arr = np.asarray(n, dtype=float)
+    z = float(norm.ppf(1.0 - alpha / 2.0))
+    safe_n = np.where(n_arr > 0, n_arr, 1.0)
+    p = k_arr / safe_n
+    denom = 1.0 + z**2 / safe_n
+    center = (p + z**2 / (2.0 * safe_n)) / denom
+    margin = z * np.sqrt(p * (1.0 - p) / safe_n + z**2 / (4.0 * safe_n**2)) / denom
+    low = np.where(n_arr > 0, np.maximum(center - margin, 0.0), np.nan)
+    high = np.where(n_arr > 0, np.minimum(center + margin, 1.0), np.nan)
+    return low, high
+
+
+fraud_by_identity = (
+    merged.assign(has_identity=has_identity)
+    .groupby("has_identity", observed=True)["isFraud"]
+    .agg(n_fraud="sum", n="count", fraud_rate="mean")
+)
+ci_low, ci_high = wilson_ci(
+    fraud_by_identity["n_fraud"].to_numpy(),
+    fraud_by_identity["n"].to_numpy(),
+)
+fraud_by_identity["ci_low_95"] = ci_low
+fraud_by_identity["ci_high_95"] = ci_high
+print(fraud_by_identity)
+attach_artifact(
+    run,
+    fraud_by_identity.reset_index().to_dict(orient="records"),
+    name="fraud_by_identity",
+)
+"""
+    ),
     _md(
         """
 ## Section B — Target Analysis
 
-Fraud prevalence, fraud rate vs transaction amount bucket, product
-code, and hour-of-day. Three decisions come out of this section:
+Fraud prevalence overall and per slice — amount bucket, ProductCD,
+hour-of-day, card brand and type, day-of-week × hour heatmap, top-20
+`P_emaildomain` by fraud rate, and the log-scale `TransactionAmt`
+overlay fraud-vs-non-fraud. Every aggregated rate is reported with a
+95% Wilson confidence interval (helper defined at the end of Section
+A) so a slice with N=12 doesn't visually outweigh one with N=120,000.
+
+Three decisions come out of this section:
 
 - **AUC over F1** as the headline metric — 3.5% fraud makes F1
   threshold-sensitive in a way that obscures model skill.
 - **Economic cost (Sprint 4) replaces F1 threshold tuning** —
   `fraud_cost_usd` / `fp_cost_usd` are the decision-relevant units.
-- **Hour-of-day is predictive enough to warrant a feature** (Sprint 2).
+- **Hour-of-day, day-of-week, card type, and email domain are all
+  predictive enough to warrant features** in Sprint 2.
 """
     ),
     _code(
         """
-fraud_rate = float(merged["isFraud"].mean())
-print(f"Overall fraud rate: {fraud_rate:.4%}")
-
+n_total = int(len(merged))
+n_fraud = int(merged["isFraud"].sum())
+overall_low, overall_high = wilson_ci(np.array([n_fraud]), np.array([n_total]))
+overall = {
+    "n_total": n_total,
+    "n_fraud": n_fraud,
+    "fraud_rate": round(n_fraud / n_total, 6),
+    "ci_low_95": round(float(overall_low[0]), 6),
+    "ci_high_95": round(float(overall_high[0]), 6),
+}
+print(json.dumps(overall, indent=2))
+attach_artifact(run, overall, name="overall_fraud_rate")
+"""
+    ),
+    _code(
+        """
 amt_bins = [0, 25, 50, 100, 250, 500, 1000, 5000, np.inf]
-bucket = pd.cut(merged["TransactionAmt"], bins=amt_bins, include_lowest=True)
-rate_by_amt = merged.groupby(bucket, observed=True)["isFraud"].mean()
+amt_bucket = pd.cut(merged["TransactionAmt"], bins=amt_bins, include_lowest=True)
+rate_by_amt = (
+    merged.assign(_amt_bucket=amt_bucket)
+    .groupby("_amt_bucket", observed=True)["isFraud"]
+    .agg(n_fraud="sum", n="count", fraud_rate="mean")
+)
+amt_low, amt_high = wilson_ci(
+    rate_by_amt["n_fraud"].to_numpy(), rate_by_amt["n"].to_numpy()
+)
+rate_by_amt["ci_low_95"] = amt_low
+rate_by_amt["ci_high_95"] = amt_high
 
-rate_by_product = merged.groupby("ProductCD", observed=True)["isFraud"].mean().sort_values()
-
-hour_of_day = (merged["TransactionDT"] // 3600) % 24
-rate_by_hour = merged.groupby(hour_of_day)["isFraud"].mean()
-
-fig, axes = plt.subplots(1, 3, figsize=(16, 4))
-rate_by_amt.plot.bar(ax=axes[0], color="#3b6fb3")
-axes[0].set_title("Fraud rate by transaction amount")
-axes[0].set_ylabel("fraud rate")
-axes[0].tick_params(axis="x", rotation=35)
-
-rate_by_product.plot.bar(ax=axes[1], color="#3b6fb3")
-axes[1].set_title("Fraud rate by ProductCD")
-
-rate_by_hour.plot(ax=axes[2], color="#3b6fb3", marker="o")
-axes[2].set_title("Fraud rate by hour of day")
-axes[2].set_xlabel("hour (derived from TransactionDT)")
-
+fig, ax = plt.subplots(figsize=(10, 4))
+x = np.arange(len(rate_by_amt))
+ax.bar(x, rate_by_amt["fraud_rate"], color="#3b6fb3")
+ax.errorbar(
+    x,
+    rate_by_amt["fraud_rate"],
+    yerr=[
+        rate_by_amt["fraud_rate"] - rate_by_amt["ci_low_95"],
+        rate_by_amt["ci_high_95"] - rate_by_amt["fraud_rate"],
+    ],
+    fmt="none",
+    color="black",
+    capsize=3,
+    linewidth=0.8,
+)
+ax.set_xticks(x)
+ax.set_xticklabels([str(b) for b in rate_by_amt.index], rotation=35, ha="right")
+ax.set_ylabel("fraud rate (95% Wilson CI)")
+ax.set_title("Fraud rate by TransactionAmt bucket")
 fig.tight_layout()
-fig.savefig(FIG_DIR / "target_analysis.png", dpi=150, bbox_inches="tight")
-attach_artifact(run, fig, name="target_analysis")
+fig.savefig(FIG_DIR / "fraud_rate_by_amount.png", dpi=150, bbox_inches="tight")
+attach_artifact(run, fig, name="fraud_rate_by_amount")
+plt.close(fig)
+print(rate_by_amt)
+"""
+    ),
+    _code(
+        """
+rate_by_product = (
+    merged.groupby("ProductCD", observed=True)["isFraud"]
+    .agg(n_fraud="sum", n="count", fraud_rate="mean")
+    .sort_values("fraud_rate")
+)
+prod_low, prod_high = wilson_ci(
+    rate_by_product["n_fraud"].to_numpy(), rate_by_product["n"].to_numpy()
+)
+rate_by_product["ci_low_95"] = prod_low
+rate_by_product["ci_high_95"] = prod_high
+
+fig, ax = plt.subplots(figsize=(7, 4))
+x = np.arange(len(rate_by_product))
+ax.bar(x, rate_by_product["fraud_rate"], color="#3b6fb3")
+ax.errorbar(
+    x,
+    rate_by_product["fraud_rate"],
+    yerr=[
+        rate_by_product["fraud_rate"] - rate_by_product["ci_low_95"],
+        rate_by_product["ci_high_95"] - rate_by_product["fraud_rate"],
+    ],
+    fmt="none",
+    color="black",
+    capsize=3,
+    linewidth=0.8,
+)
+ax.set_xticks(x)
+ax.set_xticklabels(list(rate_by_product.index))
+ax.set_ylabel("fraud rate (95% Wilson CI)")
+ax.set_title("Fraud rate by ProductCD")
+fig.tight_layout()
+fig.savefig(FIG_DIR / "fraud_rate_by_product.png", dpi=150, bbox_inches="tight")
+attach_artifact(run, fig, name="fraud_rate_by_product")
+plt.close(fig)
+print(rate_by_product)
+"""
+    ),
+    _code(
+        """
+hour_groups = (
+    merged.assign(_hour=event_dt.dt.hour.to_numpy())
+    .groupby("_hour", observed=True)["isFraud"]
+    .agg(n_fraud="sum", n="count", fraud_rate="mean")
+    .sort_index()
+)
+hour_low, hour_high = wilson_ci(
+    hour_groups["n_fraud"].to_numpy(), hour_groups["n"].to_numpy()
+)
+hour_groups["ci_low_95"] = hour_low
+hour_groups["ci_high_95"] = hour_high
+
+fig, ax = plt.subplots(figsize=(10, 4))
+ax.plot(hour_groups.index, hour_groups["fraud_rate"], color="#3b6fb3", marker="o")
+ax.fill_between(
+    hour_groups.index,
+    hour_groups["ci_low_95"],
+    hour_groups["ci_high_95"],
+    color="#3b6fb3",
+    alpha=0.2,
+    label="95% Wilson CI",
+)
+ax.set_xlabel("hour of day (UTC, derived from event_dt)")
+ax.set_ylabel("fraud rate")
+ax.set_xticks(range(0, 24, 2))
+ax.set_title("Fraud rate by hour of day")
+ax.legend()
+fig.tight_layout()
+fig.savefig(FIG_DIR / "fraud_rate_by_hour.png", dpi=150, bbox_inches="tight")
+attach_artifact(run, fig, name="fraud_rate_by_hour")
+plt.close(fig)
+"""
+    ),
+    _code(
+        """
+# Per-card-attribute fraud rate. Drop near-empty groups
+# (n < CARD_MIN_N) so a 4-row "samsung pay" bucket doesn't dominate the
+# y-axis; the IEEE-CIS card families that survive the filter are the
+# ones a Sprint 2 categorical encoder will actually see at training time.
+CARD_MIN_N = 100
+fig, axes = plt.subplots(1, 2, figsize=(14, 4))
+for ax, col in zip(axes, ["card4", "card6"], strict=True):
+    rate_by_card = (
+        merged.groupby(col, observed=True)["isFraud"]
+        .agg(n_fraud="sum", n="count", fraud_rate="mean")
+        .sort_values("fraud_rate")
+    )
+    rate_by_card = rate_by_card[rate_by_card["n"] >= CARD_MIN_N]
+    card_low, card_high = wilson_ci(
+        rate_by_card["n_fraud"].to_numpy(), rate_by_card["n"].to_numpy()
+    )
+    rate_by_card["ci_low_95"] = card_low
+    rate_by_card["ci_high_95"] = card_high
+
+    x = np.arange(len(rate_by_card))
+    ax.bar(x, rate_by_card["fraud_rate"], color="#3b6fb3")
+    ax.errorbar(
+        x,
+        rate_by_card["fraud_rate"],
+        yerr=[
+            rate_by_card["fraud_rate"] - rate_by_card["ci_low_95"],
+            rate_by_card["ci_high_95"] - rate_by_card["fraud_rate"],
+        ],
+        fmt="none",
+        color="black",
+        capsize=3,
+        linewidth=0.8,
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(idx) for idx in rate_by_card.index], rotation=20, ha="right")
+    ax.set_ylabel("fraud rate (95% Wilson CI)")
+    ax.set_title(f"Fraud rate by {col} (n ≥ {CARD_MIN_N})")
+    print(f"--- {col} ---")
+    print(rate_by_card)
+fig.tight_layout()
+fig.savefig(FIG_DIR / "fraud_rate_by_card.png", dpi=150, bbox_inches="tight")
+attach_artifact(run, fig, name="fraud_rate_by_card")
+plt.close(fig)
+"""
+    ),
+    _code(
+        """
+heatmap_df = (
+    merged.assign(
+        _dow=event_dt.dt.dayofweek.to_numpy(),
+        _hour=event_dt.dt.hour.to_numpy(),
+    )
+    .groupby(["_dow", "_hour"], observed=True)["isFraud"]
+    .mean()
+    .unstack("_hour")
+)
+day_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+heatmap_df.index = pd.Index([day_labels[int(i)] for i in heatmap_df.index], name="dow")
+
+fig, ax = plt.subplots(figsize=(12, 4))
+sns.heatmap(
+    heatmap_df,
+    ax=ax,
+    cmap="rocket_r",
+    annot=False,
+    cbar_kws={"label": "fraud rate"},
+)
+ax.set_title("Fraud rate — day of week × hour of day (event_dt UTC)")
+ax.set_xlabel("hour")
+ax.set_ylabel("day of week")
+fig.tight_layout()
+fig.savefig(FIG_DIR / "fraud_rate_dow_hour_heatmap.png", dpi=150, bbox_inches="tight")
+attach_artifact(run, fig, name="fraud_rate_dow_hour_heatmap")
+plt.close(fig)
+"""
+    ),
+    _code(
+        """
+# Top-20 P_emaildomain by fraud rate, restricted to domains with at
+# least DOMAIN_MIN_N transactions so a 3-row "edu.in" bucket doesn't
+# dominate the chart. P_emaildomain is the purchaser's email; Sprint 2
+# may add R_emaildomain (recipient) symmetrically.
+DOMAIN_MIN_N = 500
+domain_groups = (
+    merged.groupby("P_emaildomain", observed=True)["isFraud"]
+    .agg(n_fraud="sum", n="count", fraud_rate="mean")
+)
+domain_groups = (
+    domain_groups[domain_groups["n"] >= DOMAIN_MIN_N]
+    .sort_values("fraud_rate", ascending=False)
+    .head(20)
+)
+dom_low, dom_high = wilson_ci(
+    domain_groups["n_fraud"].to_numpy(), domain_groups["n"].to_numpy()
+)
+domain_groups["ci_low_95"] = dom_low
+domain_groups["ci_high_95"] = dom_high
+
+fig, ax = plt.subplots(figsize=(10, 7))
+y = np.arange(len(domain_groups))[::-1]
+ax.barh(y, domain_groups["fraud_rate"], color="#3b6fb3")
+ax.errorbar(
+    domain_groups["fraud_rate"],
+    y,
+    xerr=[
+        domain_groups["fraud_rate"] - domain_groups["ci_low_95"],
+        domain_groups["ci_high_95"] - domain_groups["fraud_rate"],
+    ],
+    fmt="none",
+    color="black",
+    capsize=3,
+    linewidth=0.8,
+)
+ax.set_yticks(y)
+ax.set_yticklabels([str(idx) for idx in domain_groups.index])
+ax.set_xlabel("fraud rate (95% Wilson CI)")
+ax.set_title(f"Top-20 P_emaildomain by fraud rate (n ≥ {DOMAIN_MIN_N})")
+fig.tight_layout()
+fig.savefig(FIG_DIR / "fraud_rate_by_email_domain.png", dpi=150, bbox_inches="tight")
+attach_artifact(run, fig, name="fraud_rate_by_email_domain")
+plt.close(fig)
+print(domain_groups)
+"""
+    ),
+    _code(
+        """
+# Density overlay on log(1 + TransactionAmt) so the long right tail
+# doesn't dominate; both classes share the same bin grid so visual
+# differences in shape are real, not artefacts of binning.
+log_amt = np.log1p(merged["TransactionAmt"].to_numpy())
+is_fraud = merged["isFraud"].to_numpy().astype(bool)
+log_amt_legit = log_amt[~is_fraud]
+log_amt_fraud = log_amt[is_fraud]
+
+fig, ax = plt.subplots(figsize=(10, 5))
+bins = np.linspace(float(log_amt.min()), float(log_amt.max()), 80)
+ax.hist(
+    log_amt_legit,
+    bins=bins,
+    density=True,
+    alpha=0.5,
+    color="#3b6fb3",
+    label=f"non-fraud (n={len(log_amt_legit):,})",
+)
+ax.hist(
+    log_amt_fraud,
+    bins=bins,
+    density=True,
+    alpha=0.5,
+    color="#c85050",
+    label=f"fraud (n={len(log_amt_fraud):,})",
+)
+ax.set_xlabel("log(1 + TransactionAmt)")
+ax.set_ylabel("density")
+ax.set_title("TransactionAmt distribution: fraud vs non-fraud (log scale)")
+ax.legend()
+fig.tight_layout()
+fig.savefig(FIG_DIR / "transaction_amt_overlay.png", dpi=150, bbox_inches="tight")
+attach_artifact(run, fig, name="transaction_amt_overlay")
 plt.close(fig)
 """
     ),
@@ -437,7 +821,7 @@ Copied verbatim into [`reports/sprint1_eda_summary.md`](../reports/sprint1_eda_s
 11. **Baseline AUC gap (random vs temporal) is the leakage signal.**
     Sprint 2's feature pipeline must not widen this gap. The
     full-dataset numbers live in
-    [`sprints/sprint_1/prompt_1_1_report.md`](../sprints/sprint_1/prompt_1_1_report.md).
+    [`sprints/sprint_1/prompt_1_1_scaffold_report.md`](../sprints/sprint_1/prompt_1_1_scaffold_report.md).
 """
     ),
     _code(
