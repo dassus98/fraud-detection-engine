@@ -1,0 +1,67 @@
+# Universal Standards require:
+#   lint -> type-check -> test -> build Docker image -> smoke-test API
+# Sprint 0 implements the first three. Docker build and API smoke-test
+# are added in Sprint 5 when the serving layer exists.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.9.24"
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --all-extras --frozen
+
+      - name: Ruff check
+        run: uv run ruff check src tests scripts
+
+      - name: Ruff format (enforce)
+        run: uv run ruff format --check src tests scripts
+
+      - name: Mypy (strict, src only)
+        run: uv run mypy src
+
+      - name: Pytest (unit)
+        run: uv run python -m pytest tests/unit --no-cov -q
+
+      - name: Verify bootstrap
+        run: uv run python scripts/verify_bootstrap.py
+
+      # Codecov upload stays wired but disabled until CODECOV_TOKEN is
+      # added to the repository's GitHub Actions secrets. To enable:
+      #   1. Add CODECOV_TOKEN to repo secrets (Settings → Secrets).
+      #   2. Swap `--no-cov` for `--cov --cov-report=xml` in the Pytest step.
+      #   3. Delete the `if: ${{ false }}` guard below.
+      - name: Upload coverage to Codecov
+        if: ${{ false }}
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: false

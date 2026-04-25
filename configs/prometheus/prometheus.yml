@@ -1,0 +1,32 @@
+# Prometheus scrape config for the dev stack — skeleton.
+#
+# Sprint 0 (this file): bare self-scrape so the container boots and the
+#   `/targets` page renders without errors.
+# Sprint 5: the fraud-api job below starts returning UP once the FastAPI
+#   /metrics endpoint is served on the host.
+# Sprint 6: additional scrape jobs (redis_exporter, postgres_exporter,
+#   node_exporter) will be added here as the monitoring surface grows.
+#
+# One scrape every 15s — cheap on a laptop, fine-grained enough for the
+# fraud-API latency dashboards Sprint 6 will plot.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Prometheus self-scrape. Makes `up{job="prometheus"}` available so a
+  # Sprint 6 alerting rule can catch a dead Prometheus.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Sprint 5 exposes /metrics on the host API at $API_PORT (default 8000).
+  # The target reads "DOWN" on Prometheus's /targets page until the API
+  # boots — intentional and diagnostic during dev. `host.docker.internal`
+  # resolves via the `extra_hosts: host-gateway` mapping in
+  # docker-compose.dev.yml (works on Docker Desktop + native Linux).
+  - job_name: fraud-api
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+    metrics_path: /metrics

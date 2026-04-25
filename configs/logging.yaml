@@ -1,0 +1,24 @@
+# Logging reference configuration.
+#
+# This file is read-only documentation. Runtime logging behaviour is
+# defined in src/fraud_engine/utils/logging.py, which binds structlog
+# processors to stdlib handlers. Any change here must be mirrored in
+# utils/logging.py or it has no effect.
+
+level: INFO            # stdlib level threshold
+json_to_stdout: true   # JSON-formatted records feed ELK/Loki pipelines
+text_to_file: true     # human-readable mirror for local debugging
+log_dir: ./logs        # overwritten by Settings.logs_dir at runtime
+
+# File layout: logs/{pipeline_name}/{run_id}.log
+# run_id is a UUID4 propagated through every log record in a single
+# pipeline execution so traces can be reconstructed post-hoc.
+
+# Rotation is a TODO for Sprint 5 (production-ready monitoring):
+#   - Rotate at 100 MB or daily, whichever comes first
+#   - Keep 14 days of history
+#   - Compress rotated files with gzip
+rotation:
+  enabled: false
+  max_bytes: 104857600
+  backup_count: 14

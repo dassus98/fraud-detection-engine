@@ -1,0 +1,116 @@
+# Development stack for the fraud-detection engine.
+# Start: `make docker-up`   Stop: `make docker-down`   Status: `make docker-ps`
+#
+# Every service is bound to 127.0.0.1 to keep ports off the LAN. If a
+# host port collides with something else on your machine, override the
+# corresponding *_PORT env var in .env — no other change needed.
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    container_name: fraud-postgres
+    # All Postgres credentials come from .env (see .env.example). The
+    # `${VAR:-default}` form keeps `docker compose up -d` working for a
+    # fresh clone before .env is filled in, without baking real secrets
+    # into this file (CLAUDE §5.4, spec 0.3.d: "no secrets in compose").
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fraud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fraud}
+      POSTGRES_DB: ${POSTGRES_DB:-fraud}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U ${POSTGRES_USER:-fraud} -d ${POSTGRES_DB:-fraud}"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: fraud-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.11.1
+    container_name: fraud-mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+    volumes:
+      - mlflow_data:/mlflow
+    ports:
+      - "127.0.0.1:${MLFLOW_PORT:-5000}:5000"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "python -c 'import urllib.request,sys;sys.exit(0 if urllib.request.urlopen(\"http://localhost:5000/\").status==200 else 1)'"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: fraud-prometheus
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    extra_hosts:
+      # Host-gateway mapping so Prometheus inside the container can scrape
+      # the FastAPI /metrics endpoint running on the host (Sprint 5).
+      # Works identically on Docker Desktop (Mac/Windows/WSL2) and native
+      # Linux Docker via the magic `host-gateway` value.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: fraud-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      # Mount `configs/grafana/` as the datasources provisioning dir
+      # — Grafana auto-picks up `datasources.yml` on first boot.
+      # Sprint 6 will add a sibling `dashboards.yml` under the same
+      # tree without needing a compose edit.
+      - ./configs/grafana:/etc/grafana/provisioning/datasources:ro
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+  redis_data:
+  mlflow_data:
+  prometheus_data:
+  grafana_data:

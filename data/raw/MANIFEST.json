@@ -1,0 +1,27 @@
+{
+  "source": "kaggle:ieee-fraud-detection",
+  "downloaded_at": "2026-04-18T20:28:29.000906+00:00",
+  "schema_version": 1,
+  "files": {
+    "sample_submission.csv": {
+      "sha256": "50d7e0d6fcfc6e498efc297001f252101512ccdcb34aefbde6db98f8242a3626",
+      "bytes": 6080314
+    },
+    "test_identity.csv": {
+      "sha256": "3e5978cb13ca5e72f52babc4349ae0125e14b87ca8bfabe952ab67bb4ff1e10b",
+      "bytes": 25797161
+    },
+    "test_transaction.csv": {
+      "sha256": "2a8e51f1d335a86025d2b7f45beb9b78d0ab1edd726ef531d8b71a8a0065c011",
+      "bytes": 613194934
+    },
+    "train_identity.csv": {
+      "sha256": "b63c725d8377be90a995268d97f347c17d456b95db45807adcf9f59cd603c37c",
+      "bytes": 26529680
+    },
+    "train_transaction.csv": {
+      "sha256": "3a5c83ab6b3cc13dcabe5ffa9f522307fd5f7f7b6e6f6a60c32284ca6283d642",
+      "bytes": 683351067
+    }
+  }
+}
