@@ -25,10 +25,11 @@ from fraud_engine.utils.mlflow_setup import (
     setup_experiment,
 )
 from fraud_engine.utils.seeding import set_all_seeds
-from fraud_engine.utils.tracing import Run, attach_artifact, run_context
+from fraud_engine.utils.tracing import Run, RunMetadata, attach_artifact, run_context
 
 __all__ = [
     "Run",
+    "RunMetadata",
     "attach_artifact",
     "bind_request_id",
     "compute_psi",

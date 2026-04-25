@@ -157,7 +157,7 @@ configuration). The payoff — traceable pipelines — is worth it.
 
 **Trade-off:** Grafana dashboards are JSON blobs that drift from
 the codebase they describe. We mitigate by version-controlling the
-dashboard JSON under `docker/grafana/` and treating dashboard
+dashboard JSON under `configs/grafana/` and treating dashboard
 changes as code review items.
 
 ## Consequences

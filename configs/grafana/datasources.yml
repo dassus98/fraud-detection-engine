@@ -1,0 +1,23 @@
+# Grafana datasource provisioning — skeleton.
+#
+# Grafana picks up this file on first boot (via the provisioning-path
+# volume mount in docker-compose.dev.yml) and materialises the Prometheus
+# datasource automatically — no click-through needed. `editable: true`
+# lets devs tweak the URL in the UI for experimentation without forcing
+# a file edit.
+#
+# Sprint 0 (this file): Prometheus datasource only.
+# Sprint 6: dashboards + alerts will be provisioned alongside.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # `prometheus` is the compose service name — Docker's embedded DNS
+    # resolves it on the shared network without any host.docker.internal
+    # gymnastics because Grafana and Prometheus live in the same compose.
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

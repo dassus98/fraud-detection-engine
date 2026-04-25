@@ -90,15 +90,23 @@ from fraud_engine.utils.mlflow_setup import (
     configure_mlflow, setup_experiment,
     log_dataframe_stats, log_economic_metrics,
 )
+from fraud_engine.config.settings import get_settings
 import mlflow
 
+settings = get_settings()
 configure_mlflow()
 exp_id = setup_experiment()                 # defaults to settings.mlflow_experiment_name
 with mlflow.start_run(experiment_id=exp_id):
     log_dataframe_stats(train_df, prefix="train")
     log_dataframe_stats(val_df, prefix="val")
-    # ... train model ...
-    log_economic_metrics(fn_rate, fp_rate, total_cost_usd)
+    # ... train model, score val set, threshold predictions ...
+    # tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    log_economic_metrics(
+        fn_count=fn, fp_count=fp, tp_count=tp, tn_count=tn,
+        fraud_cost=settings.fraud_cost_usd,
+        fp_cost=settings.fp_cost_usd,
+        tp_cost=settings.tp_cost_usd,
+    )
 ```
 
 Cross-reference `run_context` and MLflow via a shared `run_id`:
@@ -131,24 +139,32 @@ stdout always emits the same JSON line that the text file captures — Sprint 5'
 
 ### 2.2 `jq` recipes
 
+These recipes consume the **JSON stream** (stdout). The on-disk `logs/{pipeline}/{run_id}.log` files are the text-rendered mirror — they're `tail -f` ergonomic, not jq-parseable. To run jq offline, capture stdout to a file first:
+
 ```bash
-# Every event from one run
-jq 'select(.run_id == "abc123...")' logs/feature-pipeline/*.log
-
-# Every slow function (>500ms)
-jq 'select(.duration_ms != null and .duration_ms > 500)' logs/**/*.log
-
-# All DataFrame snapshots
-jq 'select(.event == "dataframe.snapshot")' logs/**/*.log
-
-# Errors only
-jq 'select(.level == "error")' logs/**/*.log
-
-# Request-scoped trail (Sprint 5)
-jq 'select(.request_id == "req-xyz")' logs/**/*.log
+python -m fraud_engine.scripts.train 2>/dev/null | tee logs/train.jsonl
 ```
 
-Pipe to `| head -n 5` for readability; drop `--compact-output` to pretty-print.
+Then any of the recipes below works:
+
+```bash
+# Every event from one run
+jq 'select(.run_id == "abc123...")' logs/train.jsonl
+
+# Every slow function (>500ms)
+jq 'select(.duration_ms != null and .duration_ms > 500)' logs/train.jsonl
+
+# All DataFrame snapshots
+jq 'select(.event == "dataframe.snapshot")' logs/train.jsonl
+
+# Errors only
+jq 'select(.level == "error")' logs/train.jsonl
+
+# Request-scoped trail (Sprint 5)
+jq 'select(.request_id == "req-xyz")' logs/api.jsonl
+```
+
+Pipe to `| head -n 5` for readability; drop `--compact-output` to pretty-print. For per-run summaries (single file, no capture needed), see §2.3 — `run.json` is JSON natively.
 
 ### 2.3 Run summary
 
