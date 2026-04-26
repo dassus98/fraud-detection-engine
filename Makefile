@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 .PHONY: help install format lint typecheck test test-fast test-integration \
-        test-lineage nb-test data-download data-profile sprint1-baseline \
+        test-lineage nb-test notebooks data-download data-profile sprint1-baseline \
         train serve docker-up docker-down docker-ps clean
 
 # Load .env so API_HOST / API_PORT flow into `make serve`.
@@ -38,7 +38,11 @@ test-lineage:  ## Run schema-lineage tests.
 	uv run python -m pytest tests/lineage
 
 nb-test:  ## Execute notebooks end-to-end via nbmake (catches util-rename drift).
-	uv run python -m pytest --no-cov --nbmake notebooks
+	DATA_DIR=$(CURDIR)/data uv run python -m pytest --no-cov --nbmake notebooks
+
+notebooks:  ## Rebuild + execute every committable notebook in place (commit-ready).
+	uv run python scripts/_build_eda_notebook.py
+	DATA_DIR=$(CURDIR)/data uv run jupyter nbconvert --to notebook --execute --inplace notebooks/00_observability_demo.ipynb
 
 data-download:  ## Fetch IEEE-CIS from Kaggle into data/raw/ and write the manifest.
 	uv run python scripts/download_data.py
