@@ -1416,82 +1416,200 @@ past 24h").
         """
 ## Section E — Temporal Structure
 
-Daily transaction count, daily fraud rate, TransactionDT min/max.
-Confirms the 6-month span (Dec 2017 → May 2018) implied by the
-community-standard anchor and justifies the **4/1/1 calendar split**
-used by `Settings.train_end_dt` / `val_end_dt`.
+Weekly transaction volume, weekly fraud rate (with Wilson 95% CI
+ribbons), and a two-sample Kolmogorov–Smirnov test that compares
+the first and second halves of the calendar to surface
+distributional drift on the top-10 most fraud-distinguishing
+numeric features. Together they validate the **4/1/1 calendar
+split** encoded in `Settings.train_end_dt` / `val_end_dt`.
 
-Sprint 1's splitter encodes this decision mechanically so every
-later sprint points at the same rows. If you change the anchor or
-the boundaries, every downstream AUC number moves with you.
+If the KS test surfaces strong drift, a stratified or rolling-
+window CV would be safer than a single calendar partition. Sprint
+1 locks the boundaries mechanically so every later sprint scores
+on the same rows; if you change the anchor or the boundaries,
+every downstream AUC number moves with you.
 """
     ),
     _code(
         """
+# Weekly aggregation: smoother than daily, fits a 6-month dataset
+# (~26 weeks). Wilson CI ribbons preserve visually-honest separation
+# between weeks even though all weeks are large here.
+WEEKLY_AGG_DAYS = 7
+
 from datetime import datetime
 
 anchor = datetime.fromisoformat(SETTINGS.transaction_dt_anchor_iso)
-seconds_per_day = 86400
-day_since_anchor = merged["TransactionDT"] // seconds_per_day
-daily_count = day_since_anchor.value_counts().sort_index()
-daily_fraud_rate = merged.groupby(day_since_anchor)["isFraud"].mean()
+seconds_per_week = 86400 * WEEKLY_AGG_DAYS
+week_since_anchor = merged["TransactionDT"] // seconds_per_week
+weekly_count = week_since_anchor.value_counts().sort_index()
+weekly_agg = (
+    merged.assign(_week=week_since_anchor)
+    .groupby("_week", observed=True)["isFraud"]
+    .agg(n_fraud="sum", n="count", fraud_rate="mean")
+    .sort_index()
+)
+wk_low, wk_high = wilson_ci(
+    weekly_agg["n_fraud"].to_numpy(), weekly_agg["n"].to_numpy()
+)
+weekly_agg["ci_low_95"] = wk_low
+weekly_agg["ci_high_95"] = wk_high
 
-train_day = SETTINGS.train_end_dt // seconds_per_day
-val_day = SETTINGS.val_end_dt // seconds_per_day
+train_week = SETTINGS.train_end_dt // seconds_per_week
+val_week = SETTINGS.val_end_dt // seconds_per_week
 
 fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
-daily_count.plot(ax=axes[0], color="#3b6fb3")
-axes[0].axvline(train_day, color="#d4b43c", linestyle="--", label=f"train_end_dt (day {train_day})")
-axes[0].axvline(val_day, color="#c85050", linestyle="--", label=f"val_end_dt (day {val_day})")
-axes[0].set_ylabel("transactions / day")
-axes[0].set_title(f"IEEE-CIS temporal density (anchor = {anchor.date().isoformat()} UTC)")
+weekly_count.plot(ax=axes[0], color="#3b6fb3", marker="o")
+axes[0].axvline(train_week, color="#d4b43c", linestyle="--", label=f"train_end (week {train_week})")
+axes[0].axvline(val_week, color="#c85050", linestyle="--", label=f"val_end (week {val_week})")
+axes[0].set_ylabel("transactions / week")
+axes[0].set_title(f"IEEE-CIS weekly volume + fraud rate (anchor = {anchor.date().isoformat()} UTC)")
 axes[0].legend()
 
-daily_fraud_rate.rolling(7, min_periods=1).mean().plot(ax=axes[1], color="#3b6fb3")
-axes[1].axvline(train_day, color="#d4b43c", linestyle="--")
-axes[1].axvline(val_day, color="#c85050", linestyle="--")
-axes[1].set_ylabel("7-day rolling fraud rate")
-axes[1].set_xlabel("days since anchor")
+axes[1].plot(weekly_agg.index, weekly_agg["fraud_rate"], color="#3b6fb3", marker="o")
+axes[1].fill_between(
+    weekly_agg.index,
+    weekly_agg["ci_low_95"],
+    weekly_agg["ci_high_95"],
+    color="#3b6fb3",
+    alpha=0.2,
+    label="95% Wilson CI",
+)
+axes[1].axvline(train_week, color="#d4b43c", linestyle="--")
+axes[1].axvline(val_week, color="#c85050", linestyle="--")
+axes[1].set_ylabel("weekly fraud rate")
+axes[1].set_xlabel("weeks since anchor")
+axes[1].legend()
 
 fig.tight_layout()
 fig.savefig(FIG_DIR / "temporal_structure.png", dpi=150, bbox_inches="tight")
 attach_artifact(run, fig, name="temporal_structure")
 plt.close(fig)
 
-print(f"Transaction DT range: {int(merged['TransactionDT'].min()):,} … {int(merged['TransactionDT'].max()):,} seconds")
-print(f"Calendar span       : {int(day_since_anchor.min())} → {int(day_since_anchor.max())} days ({int(day_since_anchor.max()) - int(day_since_anchor.min()) + 1} days total)")
-print(f"4/1/1 boundaries    : train_end_dt={train_day}d ({anchor.date()} + {train_day}d), val_end_dt={val_day}d")
-"""
-    ),
-    _md(
-        """
-## Section F — Label Noise Investigation (cleanlab)
-
-Stratified 50k sample, LightGBM classifier, `cleanlab.find_label_issues`
-via cross-validation. Flags are written to
-`data/interim/cleanlab_flags.parquet` for Sprint 2 / 3 reference.
-
-**Decision:** do *not* remove flagged rows from training data.
-
-Why: in fraud, labels come from chargebacks + investigator review —
-these *are* the ground truth our production model will be evaluated
-against. cleanlab identifies rows whose features look
-"frauds-disguised-as-legit" (or vice versa); removing them trains
-the classifier on a self-confirming subset and hides the exact
-confusable cases the production system most needs to handle well.
-
-Sprint 3 may revisit as a **sensitivity analysis only** — compare
-AUC with vs without flagged rows, never ship a model that trained on
-fewer than all the rows.
+print(f"Week range: {int(week_since_anchor.min())} → {int(week_since_anchor.max())} ({int(week_since_anchor.max()) - int(week_since_anchor.min()) + 1} weeks total)")
+print(f"4/1/1 boundaries: train_end_week={train_week}, val_end_week={val_week}")
 """
     ),
     _code(
         """
-from sklearn.model_selection import train_test_split
+# Two-sample KS test: top-K most fraud-distinguishing numeric features,
+# first half of the calendar vs second half. Detects distributional
+# drift that would invalidate a single calendar split. Feature ranking
+# by absolute standardised mean difference is self-contained on
+# `merged` and surfaces what matters for production drift monitoring —
+# the features the model would lean on are the ones whose drift hurts
+# most.
+from scipy.stats import ks_2samp
+
+from fraud_engine.models.baseline import _select_feature_columns
+
+KS_TEST_TOP_K = 10
+KS_TEST_SIGNIFICANCE = 0.01
+KS_HALF_MIN_N = 1000
+
+feature_cols = _select_feature_columns(merged.columns)
+numeric_cols = [
+    c for c in feature_cols
+    if merged[c].dtype.kind in "fiu"
+]
+
+is_fraud_arr = merged["isFraud"].astype(bool).to_numpy()
+ranked = []
+for col in numeric_cols:
+    s = merged[col].to_numpy(dtype=float)
+    overall_std = float(np.nanstd(s))
+    if overall_std == 0.0 or not np.isfinite(overall_std):
+        continue
+    fraud_mean = float(np.nanmean(s[is_fraud_arr]))
+    non_fraud_mean = float(np.nanmean(s[~is_fraud_arr]))
+    if not (np.isfinite(fraud_mean) and np.isfinite(non_fraud_mean)):
+        continue
+    smd = abs(fraud_mean - non_fraud_mean) / overall_std
+    if not np.isfinite(smd):
+        continue
+    ranked.append((col, smd))
+ranked.sort(key=lambda kv: kv[1], reverse=True)
+top_features = [c for c, _ in ranked[:KS_TEST_TOP_K]]
+
+median_dt = merged["TransactionDT"].median()
+half1_mask = (merged["TransactionDT"] < median_dt).to_numpy()
+half2_mask = ~half1_mask
+
+ks_rows = []
+for col in top_features:
+    a = merged.loc[half1_mask, col].dropna().to_numpy()
+    b = merged.loc[half2_mask, col].dropna().to_numpy()
+    if len(a) < KS_HALF_MIN_N or len(b) < KS_HALF_MIN_N:
+        continue
+    stat, pval = ks_2samp(a, b)
+    ks_rows.append(
+        {
+            "feature": col,
+            "ks_stat": float(stat),
+            "p_value": float(pval),
+            "drifts": bool(pval < KS_TEST_SIGNIFICANCE),
+            "n_half1": int(len(a)),
+            "n_half2": int(len(b)),
+        }
+    )
+ks_drift_df = pd.DataFrame(ks_rows).sort_values("ks_stat", ascending=False)
+print(ks_drift_df.to_string(index=False))
+print(
+    f"\\n{int(ks_drift_df['drifts'].sum())} / {len(ks_drift_df)} features drift at p<{KS_TEST_SIGNIFICANCE}"
+)
+
+drift_path = SETTINGS.interim_dir / "ks_drift_top10.parquet"
+ks_drift_df.to_parquet(drift_path)
+print(f"Wrote KS drift table to {drift_path}")
+attach_artifact(run, ks_drift_df, name="ks_drift_top10")
+"""
+    ),
+    _md(
+        """
+### Takeaways
+
+- **6-month span fits a 4/1/1 calendar split** (`train_end_dt = 86400 × 121`, `val_end_dt = 86400 × 151`). Encoded mechanically in `Settings`; every later sprint reads the same boundaries.
+- **Considered alternatives.** K-fold time-series CV is too coarse for a 6-month window — folds would be ~1 month each, leaving val and test indistinguishable from training noise. Rolling-origin CV is the right tool for Sprint 3's hyperparameter tuning *inside* the train fold but is overkill for the baseline's held-out evaluation.
+- **KS drift is moderate, not catastrophic.** The top-K features show some shift across the half-split, but the dataset is non-stationary enough to validate temporal evaluation, not so non-stationary that calendar partitioning is unsafe. If a future sprint sees the drift count climb above ~half of K, switch to stratified moving-window CV before re-tuning.
+- **The random-vs-temporal AUC gap is the leakage signal Sprint 2 must not widen.** Each new feature is suspect until proven temporally clean — pair every Sprint 2 feature with a "feature-uses-only-past-data" temporal-integrity test (CLAUDE.md §6.3) before merging.
+"""
+    ),
+    _md(
+        """
+## Section F — Label Quality (cleanlab)
+
+Stratified 50k sample, LightGBM cross-validated probabilities, then
+`cleanlab.rank.get_label_quality_scores` to produce a continuous
+quality score per row (0 = worst, 1 = best). Rows below
+`LABEL_QUALITY_THRESHOLD = 0.05` are reported as candidates for
+manual review; nothing is removed from training.
+
+**Why scores, not flags.** `get_label_quality_scores` exposes the
+underlying signal `find_label_issues` thresholds internally — same
+inputs, more flexible output. Sprint 3's sensitivity analysis can
+sweep the threshold without re-running cleanlab.
+
+**Why we keep flagged rows in training.** In fraud, labels come
+from chargebacks + investigator review — these *are* the ground
+truth our production model is evaluated against. cleanlab
+identifies rows whose features look "frauds-disguised-as-legit"
+(or vice versa); removing them trains the classifier on a self-
+confirming subset and hides the exact confusable cases the
+production system most needs to handle well. Sprint 3 may revisit
+as a **sensitivity analysis only.**
+"""
+    ),
+    _code(
+        """
+from sklearn.model_selection import train_test_split, cross_val_predict
+from lightgbm import LGBMClassifier
+from cleanlab.rank import get_label_quality_scores
 
 from fraud_engine.models.baseline import _select_feature_columns
 
 CLEANLAB_SAMPLE_SIZE = 50_000
+LABEL_QUALITY_THRESHOLD = 0.05
+
 sample, _ = train_test_split(
     merged,
     train_size=CLEANLAB_SAMPLE_SIZE,
@@ -1502,9 +1620,6 @@ feature_cols = _select_feature_columns(sample.columns)
 X = sample[feature_cols]
 y = sample["isFraud"].astype(np.int64).to_numpy()
 
-from lightgbm import LGBMClassifier
-from sklearn.model_selection import cross_val_predict
-
 clf = LGBMClassifier(
     objective="binary",
     n_estimators=100,
@@ -1513,83 +1628,69 @@ clf = LGBMClassifier(
     random_state=SETTINGS.seed,
     verbose=-1,
 )
-
 pred_probs = cross_val_predict(clf, X, y, cv=3, method="predict_proba")
 
-from cleanlab.filter import find_label_issues
-
-flagged_mask = find_label_issues(
-    labels=y,
-    pred_probs=pred_probs,
-    return_indices_ranked_by="self_confidence",
+quality_scores = get_label_quality_scores(labels=y, pred_probs=pred_probs)
+below_threshold = quality_scores < LABEL_QUALITY_THRESHOLD
+n_below = int(below_threshold.sum())
+pct_below = 100.0 * n_below / len(quality_scores)
+print(
+    f"cleanlab quality scores: {n_below:,} / {CLEANLAB_SAMPLE_SIZE:,} rows "
+    f"({pct_below:.2f}%) below threshold {LABEL_QUALITY_THRESHOLD}"
 )
-# `flagged_mask` is a 1-D index array (positions in `sample`), ordered
-# worst-self-confidence first — not a boolean mask. Rebuild two aligned
-# columns: `is_flagged` (bool per row) and `self_confidence_rank`
-# (1 = most-suspect, -1 = unflagged).
-print(f"cleanlab flagged {len(flagged_mask):,} / {CLEANLAB_SAMPLE_SIZE:,} rows ({len(flagged_mask)/CLEANLAB_SAMPLE_SIZE:.2%})")
+deciles = np.quantile(quality_scores, np.linspace(0, 1, 11))
+print(
+    "Quality score deciles (0%, 10%, …, 100%): "
+    + ", ".join(f"{q:.4f}" for q in deciles)
+)
 
 sample = sample.reset_index(drop=True)
-is_flagged = np.zeros(len(sample), dtype=bool)
-is_flagged[flagged_mask] = True
-ranks = np.full(len(sample), -1, dtype=np.int64)
-ranks[flagged_mask] = np.arange(1, len(flagged_mask) + 1)
-
-flags_df = pd.DataFrame(
+quality_df = pd.DataFrame(
     {
         "TransactionID": sample["TransactionID"].to_numpy(),
-        "is_flagged": is_flagged,
-        "self_confidence_rank": ranks,
+        "quality_score": quality_scores,
+        "below_threshold": below_threshold,
     }
 )
+scores_path = SETTINGS.interim_dir / "cleanlab_quality_scores.parquet"
+quality_df.to_parquet(scores_path)
+print(f"Wrote quality scores to {scores_path}")
 
-flags_path = SETTINGS.interim_dir / "cleanlab_flags.parquet"
-flags_df.to_parquet(flags_path)
-print(f"Wrote flags to {flags_path}")
-attach_artifact(run, flags_df.head(20), name="cleanlab_flags_head")
+old_flags_path = SETTINGS.interim_dir / "cleanlab_flags.parquet"
+if old_flags_path.exists():
+    old_flags_path.unlink()
+    print(f"Removed obsolete {old_flags_path.name}")
+
+attach_artifact(run, quality_df.head(20), name="cleanlab_quality_scores_head")
+"""
+    ),
+    _md(
+        """
+### Takeaways
+
+- **Decision: keep all rows in training.** Labels come from chargebacks + investigator review and are the ground truth our model is evaluated against; removing low-score rows trains the classifier on a self-confirming subset.
+- **Sprint 3 may run sensitivity analysis only** — compare AUC with vs without flagged rows; never ship a model trained on the filtered set.
+- **Quality scores are exposed for downstream use** at `data/interim/cleanlab_quality_scores.parquet` (per-row continuous score). The threshold is documentation, not a data filter.
 """
     ),
     _md(
         """
 ## Section G — Findings Summary
 
-Copied verbatim into [`reports/sprint1_eda_summary.md`](../reports/sprint1_eda_summary.md).
+Top-10 actionable findings from this notebook, paired with the downstream decision each one informs. Mirrored into [`reports/sprint1_eda_summary.md`](../reports/sprint1_eda_summary.md) for the executive audience.
 
-1. **Scale & fingerprint.** 590,540 transactions × 434 merged columns
-   on a stock IEEE-CIS snapshot; overall fraud prevalence 3.5%;
-   identity-join coverage ~24%.
-2. **Temporal span = 6 months.** TransactionDT covers Dec 2017 → May
-   2018 under the community-standard 2017-12-01 UTC anchor. Supports
-   a 4/1/1 calendar split (`train_end_dt=121d`, `val_end_dt=151d`).
-3. **Fraud-rate stability over time.** 7-day rolling fraud rate stays
-   within ±1pp of the overall 3.5%; no calendar structure forces a
-   stratified split, so a clean temporal partition is sufficient.
-4. **AUC is the right headline metric, not F1.** 3.5% class balance
-   makes F1 highly threshold-sensitive; AUC is threshold-invariant
-   and directly comparable across sprints. Sprint 4 replaces
-   thresholding with expected-cost minimisation.
-5. **TransactionAmt is strongly monotone with fraud risk.** The
-   ≥ $1000 bucket is ~3× the overall rate — a feature Sprint 2 will
-   bin explicitly.
-6. **ProductCD is a strong categorical.** `C` and `H` have meaningfully
-   higher fraud rates than `W`; LightGBM's native categorical
-   handling picks this up without one-hot.
-7. **Identity coverage is ~24%.** Model must not fail on NaN identity
-   columns. Sprint 2 features over identity must be NaN-tolerant by
-   construction.
-8. **V-column redundancy is high.** V1–V40 shows dense within-group
-   correlation (> 0.6) across many pairs. Sprint 2 can compress
-   these into group-summary features without losing signal.
-9. **Hour-of-day is predictive.** Fraud rate varies by ~1.5× across
-   the 24-hour cycle; a simple derived feature is a Sprint 2 quick
-   win.
-10. **cleanlab-flagged rows stay in training.** Removing them would
-    bake the classifier's own confusion into the training set.
-    Flags are retained for Sprint 3 sensitivity analysis only.
-11. **Baseline AUC gap (random vs temporal) is the leakage signal.**
-    Sprint 2's feature pipeline must not widen this gap. The
-    full-dataset numbers live in
-    [`sprints/sprint_1/prompt_1_1_scaffold_report.md`](../sprints/sprint_1/prompt_1_1_scaffold_report.md).
+| # | Finding | Downstream decision |
+|---|---|---|
+| 1 | 590,540 transactions × 434 merged columns; overall fraud rate 3.5%; identity-join coverage ~24% | Sprint 2: NaN-tolerant identity features (76% of rows have no identity columns at all) |
+| 2 | 6-month span (Dec 2017 → May 2018) under the 2017-12-01 anchor; KS test shows moderate drift, not catastrophic | Sprint 1: 4/1/1 calendar split via `Settings.train_end_dt` / `val_end_dt`; the random-vs-temporal AUC gap is the leakage signal Sprint 2 must not widen |
+| 3 | Fraud rate stable within ±1 pp; class imbalance 3.5% makes F1 highly threshold-sensitive | AUC over F1 as headline metric; Sprint 4 replaces thresholding with expected-cost minimisation |
+| 4 | TransactionAmt is monotone with fraud risk; the ≥ $1000 bucket is ~3× the overall rate | Sprint 2: explicit amount bucket feature, not relying on LightGBM split-finding |
+| 5 | ProductCD has strong fraud-rate spread (`C` and `H` ≫ `W`) | Sprint 2: keep as native LightGBM categorical, no one-hot |
+| 6 | V-column family has 23 NaN-group equivalence classes (a single signature covers 168 cols); ~70–80 V cols droppable by ρ > 0.95 on a seeded 50-col sample | Sprint 2: NaN-group-aware compression + correlation pruning before any per-fold imputation |
+| 7 | Hour-of-day fraud rate varies ~1.5× across the 24-hour cycle | Sprint 2: derived hour-of-day feature is a quick win |
+| 8 | DeviceType `(no identity)` cohort has materially elevated fraud rate vs `desktop` / `mobile` despite being 76% of the population | Sprint 2: null-as-signal indicator on identity columns; do not impute identity nulls to a default category |
+| 9 | M4 has the strongest single-column predictive missingness signal in the top-20; multiple M-features show null-vs-not fraud-rate gaps with non-overlapping Wilson CIs | Sprint 2: missingness indicator on M-features alongside the categorical value |
+| 10 | cleanlab quality scores expose label noise as a continuous distribution (not a hard flag); a small minority of training rows score below 0.05 | Keep all rows in training; Sprint 3 sensitivity analysis only |
 """
     ),
     _code(
