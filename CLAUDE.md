@@ -339,6 +339,7 @@ These behaviors look productive but produce worse outcomes. They have happened b
 10. **Claiming a sprint complete without running verification.** The verification protocol (section 11) is the gate. No exceptions.
 11. **Reading from `archive/v1-original`.** That branch is portfolio history. The new build is independent. If you find yourself tempted to copy from it, stop and ask John.
 12. **Running git/gh commands outside the §2.1 carve-out.** Branch create + feature-branch push + `gh pr create` is the entire allowance. No commits, no merges, no force-push, no tags, no switching to existing branches. See section 2.
+13. **Committing notebooks without executed outputs.** Empty-output `.ipynb` files do not render on GitHub and erase the portfolio signal. See section 16 (notebook commit policy) — every committed notebook must carry rendered outputs, and `make notebooks` is the canonical regenerate-and-execute command.
 
 ---
 
@@ -397,6 +398,12 @@ make test-lineage
 python scripts/verify_bootstrap.py     # for Sprint 0
 # or
 python scripts/verify_lineage.py       # for Sprint 1+
+
+# 6. If any notebook was touched: rebuild + execute every committable
+# notebook in place. Builder defaults to executing after writing, so
+# this is also the way to update the .ipynb files for commit. See §16.
+make notebooks
+make nb-test
 ```
 
 If any return non-zero, do not proceed. Diagnose. Fix. Re-run. Only after a clean green run is the prompt complete.
@@ -493,8 +500,46 @@ If the answer is in none of these and not derivable from code, ask John. Do not 
 - **Zero hardcoded values outside config.**
 - **Zero `print()` statements. Use the logger.**
 - **Temporal integrity tests are mandatory for any feature using time-windowed data.**
+- **Notebooks ship with rendered outputs.** Every committed `.ipynb` is regenerated and executed via `make notebooks` before the PR is opened. See §16.
 - **Read this file at the start of every session.**
 
 ---
 
-_End of CLAUDE.md. Last updated: Sprint 0 bootstrap._
+## 16. Notebook Commit Policy
+
+**Every committed `.ipynb` carries rendered outputs.** Notebooks are part of the portfolio surface — GitHub renders them with their stored outputs as the public face of the EDA, profiling, and demo work. An empty-output notebook on `main` erases the very signal it was meant to convey.
+
+### 16.1 The rule
+
+A notebook is committable only after it has been executed end-to-end against the current code, with all cells producing fresh outputs. No "I'll regenerate before merging" exceptions — treat a PR-ready notebook the way a PR-ready test is treated: green, in place, before the PR is opened.
+
+### 16.2 The canonical command
+
+```bash
+make notebooks
+```
+
+Rebuilds and executes every committable notebook in place. After this returns 0:
+
+- `notebooks/01_eda.ipynb` is regenerated from `scripts/_build_eda_notebook.py` and executed by the builder's atomic build-and-execute step.
+- `notebooks/00_observability_demo.ipynb` is executed in place via `jupyter nbconvert --execute --inplace`.
+
+Every additional committable notebook added in a future sprint must be appended to this Makefile target — single point of enforcement.
+
+### 16.3 Why the builder is atomic
+
+`scripts/_build_eda_notebook.py` writes the notebook structure and then immediately runs `jupyter nbconvert --execute --inplace` on it before exiting. Running the builder always produces a notebook with rendered outputs; there is no intermediate "wrote but not executed" state to forget about.
+
+For fast iteration, the builder accepts `--no-execute`, which skips the execute step. The resulting notebook lacks outputs and **must not be committed.** The builder prints a reminder when invoked with that flag.
+
+### 16.4 Verification gate
+
+Step 6 of the [verification protocol](#11-verification-protocol) runs `make notebooks` followed by `make nb-test`. The first regenerates and executes; the second runs the `nbmake` smoke harness as an independent gate. Both must return 0 before the PR is opened.
+
+### 16.5 What this rule prevents
+
+Past failures: empty-output notebooks merged into `main`, breaking GitHub's notebook renderer; reviewers seeing only code without the plots that justify the conclusions; "I'll re-run later" turning into "I forgot, and now the outputs disagree with the report." The policy is process-level enforcement against all three.
+
+---
+
+_End of CLAUDE.md. Last updated: Sprint 1 prompt 1.1.b — added §16 notebook commit policy._

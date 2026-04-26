@@ -77,3 +77,4 @@ Thumbs.db
 # gitignored. This negation must come after every `dir/` / `dir/*`
 # pattern above.
 !**/.gitkeep
+*.nbconvert.ipynb
