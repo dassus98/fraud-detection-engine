@@ -52,6 +52,7 @@ dependencies = [
   "mlflow==3.11.1",
   # --- data acquisition ---
   "kaggle==1.6.17",
+  "pyyaml>=6.0.3",
 ]
 
 [project.optional-dependencies]
@@ -111,4 +112,9 @@ exclude_lines = [
   "raise NotImplementedError",
   "if TYPE_CHECKING:",
   "if __name__ == .__main__.:",
+]
+
+[dependency-groups]
+dev = [
+    "types-pyyaml>=6.0.12.20260408",
 ]
