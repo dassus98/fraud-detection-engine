@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from fraud_engine.data.cleaner import CleanReport, TransactionCleaner
 from fraud_engine.data.loader import LoadReport, RawDataLoader
 from fraud_engine.data.splits import (
     SplitFrames,
@@ -11,9 +12,11 @@ from fraud_engine.data.splits import (
 )
 
 __all__ = [
+    "CleanReport",
     "LoadReport",
     "RawDataLoader",
     "SplitFrames",
+    "TransactionCleaner",
     "temporal_split",
     "validate_no_overlap",
     "write_split_manifest",
