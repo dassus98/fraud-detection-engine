@@ -237,6 +237,72 @@ class TestValidateNoOverlap:
         with pytest.raises(ValueError, match="Temporal overlap.*train"):
             validate_no_overlap(splits)
 
+    def test_rejects_val_test_temporal_overlap(self) -> None:
+        """Hand-built SplitFrames with val.max >= test.min hits the second
+        contiguity branch (between val and test). Existing
+        `test_rejects_temporal_overlap` covers the train↔val branch only.
+        """
+        frame_a = pd.DataFrame(
+            {
+                "TransactionID": [1, 2],
+                "TransactionDT": [10, 20],
+                "isFraud": [0, 0],
+            }
+        )
+        frame_b = pd.DataFrame(
+            {
+                "TransactionID": [3, 4],
+                "TransactionDT": [30, 60],  # max=60
+                "isFraud": [0, 0],
+            }
+        )
+        frame_c = pd.DataFrame(
+            {
+                "TransactionID": [5, 6],
+                "TransactionDT": [55, 70],  # min=55 < 60 — overlaps val
+                "isFraud": [0, 0],
+            }
+        )
+        manifest = {"n_train": 2, "n_val": 2, "n_test": 2}
+        splits = SplitFrames(train=frame_a, val=frame_b, test=frame_c, manifest=manifest)
+        with pytest.raises(ValueError, match="Temporal overlap.*val"):
+            validate_no_overlap(splits)
+
+    def test_rejects_split_size_mismatch(self) -> None:
+        """Hand-built SplitFrames with `len(...)` totals not matching the
+        manifest's `n_train + n_val + n_test` hits the size-mismatch
+        branch. Defensive against a caller bypassing `temporal_split` and
+        constructing a malformed `SplitFrames` directly.
+        """
+        frame_a = pd.DataFrame(
+            {
+                "TransactionID": [1, 2],
+                "TransactionDT": [10, 20],
+                "isFraud": [0, 0],
+            }
+        )
+        frame_b = pd.DataFrame(
+            {
+                "TransactionID": [3],
+                "TransactionDT": [30],
+                "isFraud": [0],
+            }
+        )
+        frame_c = pd.DataFrame(
+            {
+                "TransactionID": [4],
+                "TransactionDT": [40],
+                "isFraud": [0],
+            }
+        )
+        # Manifest claims 5 total rows; the frames have only 4. The
+        # ID-set sum (4) does not equal the manifest sum (5), so the
+        # mismatch branch must raise.
+        manifest = {"n_train": 2, "n_val": 2, "n_test": 1}
+        splits = SplitFrames(train=frame_a, val=frame_b, test=frame_c, manifest=manifest)
+        with pytest.raises(ValueError, match="Split size mismatch"):
+            validate_no_overlap(splits)
+
 
 class TestWriteSplitManifest:
     """Contract tests for `write_split_manifest`."""

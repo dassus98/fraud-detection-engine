@@ -175,6 +175,14 @@ class TransactionCleaner:
             df: Merged IEEE-CIS frame, post-load. Must satisfy
                 `MergedSchema` (the cleaner does not re-validate
                 the input — that is the loader's responsibility).
+                **Subtle:** call ``loader.load_merged(optimize=False)``
+                upstream. ``optimize=True`` downcasts to
+                int32/float32/category, which does NOT satisfy
+                `MergedSchema`'s int64/float64/object dtype contract;
+                the exit-validation against `InterimTransactionSchema`
+                (which inherits those dtype checks via
+                ``MergedSchema.add_columns``) will then raise
+                `pandera.errors.SchemaErrors` mid-clean.
 
         Returns:
             A new DataFrame with all input columns preserved plus
@@ -208,9 +216,7 @@ class TransactionCleaner:
     # internals
     # ------------------------------------------------------------------
 
-    def _drop_invalid_rows(
-        self, df: pd.DataFrame
-    ) -> tuple[pd.DataFrame, dict[str, int]]:
+    def _drop_invalid_rows(self, df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
         """Apply every drop-rule and return ``(filtered_df, counts)``.
 
         Each rule logs a single ``cleaner.drops`` warning carrying
@@ -233,9 +239,7 @@ class TransactionCleaner:
         non_positive_count = int(non_positive_mask.sum())
         if non_positive_count > 0:
             sample_ids = (
-                df.loc[non_positive_mask, "TransactionID"]
-                .head(_DROP_LOG_SAMPLE_SIZE)
-                .tolist()
+                df.loc[non_positive_mask, "TransactionID"].head(_DROP_LOG_SAMPLE_SIZE).tolist()
             )
             self._log.warning(
                 "cleaner.drops",

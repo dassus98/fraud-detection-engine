@@ -38,7 +38,9 @@ kaggle.json
 /logs/
 /models/
 /mlruns/
-/reports/
+!/reports/
+/reports/*
+!/reports/sprint1_eda_summary.md
 *.joblib
 *.pkl
 *.pt

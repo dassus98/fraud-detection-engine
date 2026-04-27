@@ -148,7 +148,7 @@ def test_lineage_step_records_run_id_from_contextvars(
     bind_contextvars(run_id="abc123")
     decorated = lineage_step("bar")(_identity)
     decorated(pd.DataFrame({"a": [1]}))
-    steps = LineageLog("abc123", settings=mock_settings).read()
+    steps = LineageLog.read("abc123", settings=mock_settings)
     assert len(steps) == 1
     assert steps[0].run_id == "abc123"
 
@@ -163,13 +163,12 @@ def test_lineage_step_generates_run_id_if_unbound(
     bound = get_contextvars().get("run_id")
     assert isinstance(bound, str)
     assert len(bound) == _UUID4_HEX_LEN
-    log = LineageLog(bound, settings=mock_settings)
-    assert len(log.read()) == 1
+    assert len(LineageLog.read(bound, settings=mock_settings)) == 1
     # A second call in the same context reuses the same id and
     # appends a second record.
     decorated(df)
     assert get_contextvars().get("run_id") == bound
-    assert len(log.read()) == 2
+    assert len(LineageLog.read(bound, settings=mock_settings)) == 2
 
 
 def test_lineage_step_records_row_counts_and_duration(
@@ -184,7 +183,7 @@ def test_lineage_step_records_row_counts_and_duration(
 
     decorated = lineage_step("filter_half")(filter_half)
     decorated(df)
-    steps = LineageLog("dur1", settings=mock_settings).read()
+    steps = LineageLog.read("dur1", settings=mock_settings)
     assert len(steps) == 1
     assert steps[0].input_rows == 10
     assert steps[0].output_rows == 5
@@ -210,7 +209,7 @@ def test_lineage_step_locates_dataframe_when_self_first(
     # Decorate the unbound function so the wrapper sees args=(self, df).
     decorated = lineage_step("bound_method")(Holder.transform)
     decorated(holder, pd.DataFrame({"a": [1, 2]}))
-    steps = LineageLog("bound1", settings=mock_settings).read()
+    steps = LineageLog.read("bound1", settings=mock_settings)
     assert len(steps) == 1
     assert steps[0].input_rows == 2
 
@@ -296,7 +295,7 @@ def test_lineage_log_read_round_trips_steps(mock_settings: Settings) -> None:
     ]
     for s in steps:
         log.append(s)
-    assert log.read() == steps
+    assert LineageLog.read("rt", settings=mock_settings) == steps
 
 
 def test_lineage_log_path_under_logs_dir(mock_settings: Settings) -> None:

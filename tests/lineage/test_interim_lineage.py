@@ -22,7 +22,7 @@ Trade-offs considered:
       enlarge the prompt; intentional duplication keeps blast radius
       tight. A future prompt that wires lineage into more
       transformations should consolidate.
-    - All assertions key off `LineageLog(run_id, settings).read()`
+    - All assertions key off `LineageLog.read(run_id, settings)`
       so test failures point at the persisted artefact, not at any
       in-memory `LineageStep` object the decorator might have built.
 """
@@ -147,7 +147,7 @@ def test_decorated_cleaner_writes_lineage_record(
     df = _merged_fixture_df()
     wrapped(df)
 
-    steps = LineageLog(run_id, settings=mock_settings).read()
+    steps = LineageLog.read(run_id, settings=mock_settings)
     assert len(steps) == 1
     step = steps[0]
     assert step.step_name == "interim_clean"
@@ -167,7 +167,7 @@ def test_decorated_cleaner_drop_invariant_holds(
     wrapped = lineage_step("interim_clean")(cleaner.clean)
     wrapped(_merged_fixture_df())
 
-    steps = LineageLog(run_id, settings=mock_settings).read()
+    steps = LineageLog.read(run_id, settings=mock_settings)
     assert len(steps) == 1
     step = steps[0]
     assert cleaner.last_report is not None
@@ -183,7 +183,7 @@ def test_decorated_cleaner_fingerprints_differ_input_to_output(
     wrapped = lineage_step("interim_clean")(cleaner.clean)
     wrapped(_merged_fixture_df())
 
-    steps = LineageLog(run_id, settings=mock_settings).read()
+    steps = LineageLog.read(run_id, settings=mock_settings)
     assert len(steps) == 1
     step = steps[0]
     assert step.input_schema_hash != step.output_schema_hash

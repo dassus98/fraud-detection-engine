@@ -55,10 +55,10 @@ from fraud_engine.data.lineage import LineageLog, LineageStep
 from fraud_engine.utils.logging import configure_logging, get_logger
 
 # Step names the build pipeline emits, in chronological order. Pinned
-# here independently of `scripts.build_interim.EXPECTED_STEPS` so this
-# verifier remains the *contract* — a future refactor that renames a
-# step in the build script will fail this gate until both sides are
-# updated together.
+# here independently of `scripts/build_interim.py`'s private `_STEP_*`
+# constants so this verifier remains the *contract* — a future refactor
+# that renames a step in the build script will fail this gate until
+# both sides are updated together.
 _EXPECTED_STEPS: Final[tuple[str, ...]] = (
     "load_merged",
     "interim_clean",
@@ -251,8 +251,7 @@ def verify(run_id: str | None) -> None:
     effective_run_id = run_id or _find_latest_run_id(settings.logs_dir)
     logger.info("verify.start", run_id=effective_run_id)
 
-    log = LineageLog(effective_run_id, settings=settings)
-    steps = log.read()
+    steps = LineageLog.read(effective_run_id, settings=settings)
     if not steps:
         click.echo(
             click.style(
