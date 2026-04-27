@@ -166,7 +166,9 @@ def main(random: bool, temporal: bool, log_level: str) -> None:
         ]
         for variant, result in results.items():
             summary_lines.append(
-                f"  {variant:8s}  AUC={result.auc:.4f}  " f"model={Path(result.model_path).name}"
+                f"  {variant:8s}  AUC={result.auc:.4f}  "
+                f"AUC-PR={result.auc_pr:.4f}  LogLoss={result.log_loss:.4f}  "
+                f"model={Path(result.model_path).name}"
             )
         summary_lines.append("=" * 60)
         logger.info("sprint1.summary", lines=summary_lines)

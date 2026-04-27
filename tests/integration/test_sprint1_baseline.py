@@ -45,10 +45,12 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 
+import joblib
 import mlflow
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 
 from fraud_engine.config.settings import Settings, get_settings
@@ -190,3 +192,34 @@ def test_baseline_auc_in_expected_range(
         f"temporal AUC={result.auc:.4f} outside expected "
         f"[{_AUC_FLOOR}, {_AUC_CEILING}] band on 10k sample"
     )
+
+
+def test_saved_model_predicts_identically_on_reload(
+    merged_10k: pd.DataFrame, baseline_settings: Settings
+) -> None:
+    """Joblib round-trip is bit-exact: reloaded model recomputes result.auc.
+
+    The reloaded classifier evaluated on the same val rows the trainer
+    saw must reproduce `result.auc` to within float-precision tolerance
+    — proving the on-disk joblib is byte-identical to the in-memory
+    trained model. The val rows are reconstructed by mirroring the
+    `train_test_split` invocation in `baseline.py` (stratified, 80/20,
+    seed=baseline_settings.seed) so the reload reads against the
+    identical slice the original `roc_auc_score` saw.
+    """
+    result = train_baseline(merged_10k, variant="random", settings=baseline_settings)
+    feature_cols = [
+        c for c in merged_10k.columns if c not in {"TransactionID", "TransactionDT", "isFraud"}
+    ]
+    label = merged_10k["isFraud"].astype(np.int64)
+    _, x_val, _, y_val = train_test_split(
+        merged_10k[feature_cols],
+        label,
+        test_size=0.2,
+        stratify=label,
+        random_state=baseline_settings.seed,
+    )
+    reloaded = joblib.load(result.model_path)
+    proba = reloaded.predict_proba(x_val)[:, 1]
+    auc_recomputed = float(roc_auc_score(y_val, proba))
+    assert auc_recomputed == pytest.approx(result.auc, abs=1e-12)
