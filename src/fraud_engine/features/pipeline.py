@@ -163,21 +163,32 @@ class FeaturePipeline:
         self.last_output_dtypes = {col: str(current[col].dtype) for col in current.columns}
         return current
 
-    def save(self, path: Path) -> tuple[Path, Path]:
+    def save(
+        self,
+        path: Path,
+        pipeline_filename: str = _PIPELINE_FILENAME,
+        manifest_filename: str = _MANIFEST_FILENAME,
+    ) -> tuple[Path, Path]:
         """Persist the pipeline + manifest under `path`.
 
         Args:
             path: Destination directory. Created if missing.
-                `pipeline.joblib` and `feature_manifest.json` are
-                written into it; existing files at the same names
-                are overwritten silently.
+                Existing files at the resolved names are overwritten
+                silently.
+            pipeline_filename: Filename for the joblib payload.
+                Default `"pipeline.joblib"`. Sprint 2's tier builds
+                pass tier-specific names (e.g. `"tier1_pipeline.joblib"`)
+                so the same `models/pipelines/` directory can host
+                multiple tiers without collision.
+            manifest_filename: Filename for the manifest sidecar.
+                Default `"feature_manifest.json"`.
 
         Returns:
             ``(pipeline_path, manifest_path)`` for caller logging.
         """
         path.mkdir(parents=True, exist_ok=True)
-        pipeline_path = path / _PIPELINE_FILENAME
-        manifest_path = path / _MANIFEST_FILENAME
+        pipeline_path = path / pipeline_filename
+        manifest_path = path / manifest_filename
         joblib.dump(self, pipeline_path)
         manifest = self._build_manifest()
         manifest_path.write_text(
@@ -187,13 +198,16 @@ class FeaturePipeline:
         return pipeline_path, manifest_path
 
     @classmethod
-    def load(cls, path: Path) -> FeaturePipeline:
-        """Inverse of `save`. Reads `path / pipeline.joblib`.
+    def load(cls, path: Path, pipeline_filename: str = _PIPELINE_FILENAME) -> FeaturePipeline:
+        """Inverse of `save`. Reads `path / pipeline_filename`.
 
         Args:
             path: Directory containing the saved pipeline. The
                 manifest sidecar is not read here — it's an audit
                 artefact, not part of the runtime contract.
+            pipeline_filename: Filename to load from. Must match
+                whatever was passed to `save`. Default
+                `"pipeline.joblib"`.
 
         Returns:
             The reconstructed `FeaturePipeline`.
@@ -203,7 +217,7 @@ class FeaturePipeline:
                 `FeaturePipeline` instance. Defends against a
                 caller pointing `load` at the wrong file.
         """
-        pipeline_path = path / _PIPELINE_FILENAME
+        pipeline_path = path / pipeline_filename
         loaded = joblib.load(pipeline_path)
         if not isinstance(loaded, cls):
             raise TypeError(

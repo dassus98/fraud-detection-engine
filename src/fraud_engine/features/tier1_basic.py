@@ -535,7 +535,12 @@ class EmailDomainExtractor(BaseFeatureGenerator):
         null_source = as_str.isna()
         no_dot_with_value = ~null_source & tld.isna()
         tld = tld.mask(no_dot_with_value, "")
-        return provider, tld
+        # Convert back to `object` dtype to match the cleaner's
+        # email-column convention (`P_emaildomain` / `R_emaildomain`
+        # are `object` post-cleaner). pandas converts `<NA>` to
+        # `np.nan` on the cast — `pd.isna` still returns True for
+        # both, preserving the null-passes-through contract.
+        return provider.astype(object), tld.astype(object)
 
 
 class MissingIndicatorGenerator(BaseFeatureGenerator):

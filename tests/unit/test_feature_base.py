@@ -173,6 +173,25 @@ class TestFeaturePipelineSaveLoad:
         reloaded_out = reloaded.transform(df)
         pd.testing.assert_frame_equal(reloaded_out, original_out)
 
+    def test_save_and_load_with_custom_filename(self, tmp_path: Path) -> None:
+        """Custom `pipeline_filename` round-trips through save → load.
+
+        Sprint 2's tier builds use tier-specific filenames (e.g.
+        ``tier1_pipeline.joblib``) so the same `models/pipelines/`
+        directory can host multiple tiers. The default filename
+        preserves back-compat for callers that don't pass the kwarg.
+        """
+        pipe = FeaturePipeline(generators=[_MeanCenter("x")])
+        df = pd.DataFrame({"x": [1.0, 2.0, 3.0]})
+        original_out = pipe.fit_transform(df)
+        pipeline_path, _ = pipe.save(tmp_path, pipeline_filename="tier1_pipeline.joblib")
+        assert pipeline_path.name == "tier1_pipeline.joblib"
+        assert pipeline_path.is_file()
+
+        reloaded = FeaturePipeline.load(tmp_path, pipeline_filename="tier1_pipeline.joblib")
+        reloaded_out = reloaded.transform(df)
+        pd.testing.assert_frame_equal(reloaded_out, original_out)
+
     def test_load_rejects_wrong_object_type(self, tmp_path: Path) -> None:
         """`load` raises `TypeError` if the joblib payload isn't a FeaturePipeline."""
         joblib.dump({"not": "a pipeline"}, tmp_path / "pipeline.joblib")
