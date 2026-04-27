@@ -61,7 +61,7 @@ import mlflow
 import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import average_precision_score, log_loss, roc_auc_score
 from sklearn.model_selection import train_test_split
 
 from fraud_engine.config.settings import Settings, get_settings
@@ -108,8 +108,10 @@ class BaselineResult:
     Attributes:
         variant: Which split strategy produced this result.
         model_path: Absolute path to the persisted LightGBM model.
-        auc: ROC-AUC on the held-out set (val rows for `temporal`;
-            the stratified 20% holdout for `random`).
+        auc: ROC-AUC on the held-out (val) set. Kept un-suffixed for
+            back-compat with Sprint 1 callers — `auc_val` would be
+            the symmetric name but every existing test reads
+            `result.auc`.
         feature_importances: Top-20 features by LightGBM gain,
             descending. Values are native LightGBM gain scores (not
             normalised) so two models fit on the same data produce
@@ -117,6 +119,19 @@ class BaselineResult:
         content_hash: 64-char SHA-256 of the joblib bytes. Used to
             name the on-disk file and to assert reproducibility in
             the integration tests.
+        auc_pr: Average-precision (area under the
+            precision-recall curve) on the val set. AUC-PR is the
+            preferred headline metric for class-imbalanced fraud
+            detection because it is insensitive to the long
+            negative tail that inflates ROC-AUC.
+        log_loss: Binary log loss on the val set. Sensitive to
+            probability calibration in a way `auc` is not — a
+            well-ranked but poorly-calibrated model still scores
+            well on `auc` but badly on `log_loss`.
+        auc_train: ROC-AUC on the train fold, for the train-vs-val
+            generalisation gap.
+        auc_pr_train: Average-precision on the train fold.
+        log_loss_train: Binary log loss on the train fold.
     """
 
     variant: Variant
@@ -124,6 +139,11 @@ class BaselineResult:
     auc: float
     feature_importances: dict[str, float]
     content_hash: str
+    auc_pr: float
+    log_loss: float
+    auc_train: float
+    auc_pr_train: float
+    log_loss_train: float
 
 
 @log_call
@@ -239,9 +259,14 @@ def train_baseline(
             categorical_feature="auto",
         )
 
-        val_proba = classifier.predict_proba(x_val)[:, 1]
-        auc = float(roc_auc_score(y_val, val_proba))
-        mlflow.log_metric("auc", auc)
+        metrics = _compute_metrics(
+            classifier, x_train=x_train, y_train=y_train, x_val=x_val, y_val=y_val
+        )
+        # `auc` keeps the un-suffixed name for back-compat with the
+        # existing `test_logs_auc_metric` unit test; the other five
+        # metrics are suffixed with their slice.
+        for mlflow_key, mlflow_value in metrics.mlflow_payload().items():
+            mlflow.log_metric(mlflow_key, mlflow_value)
 
         importances = _top_k_importances(
             classifier,
@@ -264,7 +289,10 @@ def train_baseline(
         get_logger(__name__).info(
             "baseline.trained",
             variant=variant,
-            auc=auc,
+            auc=metrics.auc,
+            auc_pr=metrics.auc_pr,
+            log_loss=metrics.log_loss,
+            auc_train=metrics.auc_train,
             n_train=int(len(x_train)),
             n_val=int(len(x_val)),
             content_hash=content_hash,
@@ -274,9 +302,70 @@ def train_baseline(
     return BaselineResult(
         variant=variant,
         model_path=model_path,
-        auc=auc,
+        auc=metrics.auc,
         feature_importances=importances,
         content_hash=content_hash,
+        auc_pr=metrics.auc_pr,
+        log_loss=metrics.log_loss,
+        auc_train=metrics.auc_train,
+        auc_pr_train=metrics.auc_pr_train,
+        log_loss_train=metrics.log_loss_train,
+    )
+
+
+@dataclass(frozen=True)
+class _BaselineMetrics:
+    """Six metrics computed at training exit. Internal — flattened into
+    `BaselineResult` and `mlflow.log_metric` calls inside `train_baseline`.
+    """
+
+    auc: float
+    auc_pr: float
+    log_loss: float
+    auc_train: float
+    auc_pr_train: float
+    log_loss_train: float
+
+    def mlflow_payload(self) -> dict[str, float]:
+        """Return the six metrics keyed by their MLflow metric names.
+
+        Insertion order is the order metrics are logged; `auc`
+        (un-suffixed val ROC-AUC) is logged first so a reviewer
+        scanning the run sees the headline number on top.
+        """
+        return {
+            "auc": self.auc,
+            "auc_pr_val": self.auc_pr,
+            "log_loss_val": self.log_loss,
+            "auc_train": self.auc_train,
+            "auc_pr_train": self.auc_pr_train,
+            "log_loss_train": self.log_loss_train,
+        }
+
+
+def _compute_metrics(
+    classifier: LGBMClassifier,
+    *,
+    x_train: pd.DataFrame,
+    y_train: pd.Series[Any],
+    x_val: pd.DataFrame,
+    y_val: pd.Series[Any],
+) -> _BaselineMetrics:
+    """Run `predict_proba` once per slice and bundle the six metrics.
+
+    Pulled out of `train_baseline` so the trainer body stays under
+    the PLR0915 statement limit and the metric surface is testable
+    in isolation if a future sprint wants to.
+    """
+    train_proba = classifier.predict_proba(x_train)[:, 1]
+    val_proba = classifier.predict_proba(x_val)[:, 1]
+    return _BaselineMetrics(
+        auc=float(roc_auc_score(y_val, val_proba)),
+        auc_pr=float(average_precision_score(y_val, val_proba)),
+        log_loss=float(log_loss(y_val, val_proba)),
+        auc_train=float(roc_auc_score(y_train, train_proba)),
+        auc_pr_train=float(average_precision_score(y_train, train_proba)),
+        log_loss_train=float(log_loss(y_train, train_proba)),
     )
 
 
