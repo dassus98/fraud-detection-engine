@@ -501,6 +501,7 @@ If the answer is in none of these and not derivable from code, ask John. Do not 
 - **Zero `print()` statements. Use the logger.**
 - **Temporal integrity tests are mandatory for any feature using time-windowed data.**
 - **Notebooks ship with rendered outputs.** Every committed `.ipynb` is regenerated and executed via `make notebooks` before the PR is opened. See §16.
+- **Long-running WSL commands.** Any `wsl -d Ubuntu bash -lc '<cmd>'` that may run >60s — most notably `make test-lineage` and `make test` — must use the detached-daemon polling pattern in §17. A blocking call that produces no stdout for ~60s is killed by the WSL service with `Wsl/Service/E_UNEXPECTED`. `vmIdleTimeout=-1`, the `cd /c/Users/dchit && ` UNC-cwd workaround, and `nohup`/`setsid`/`disown` *inside* a foreground call are all individually insufficient.
 - **Read this file at the start of every session.**
 
 ---
@@ -542,4 +543,50 @@ Past failures: empty-output notebooks merged into `main`, breaking GitHub's note
 
 ---
 
-_End of CLAUDE.md. Last updated: Sprint 1 prompt 1.1.b — added §16 notebook commit policy._
+## 17. WSL Long-Running-Command Pattern
+
+A `wsl -d Ubuntu bash -lc '<cmd>'` invocation whose foreground process produces no stdout for ~60 seconds is killed by the WSL service with the error `Catastrophic failure: Wsl/Service/E_UNEXPECTED`. `vmIdleTimeout=-1` in `~/.wslconfig` keeps the VM alive but does not prevent the per-invocation kill. This affects any verification gate that exceeds the window — most notably `make test-lineage` (≈ 3 min total, with a ~2 min silent parquet fixture load before the first test prints).
+
+### 17.1 The pattern
+
+For runs that may exceed ~60 seconds, launch the work as a fully-detached daemon and poll its log file from short subsequent calls.
+
+**One call to start the daemon (returns in <5 s):**
+
+```bash
+wsl -d Ubuntu bash -lc "rm -f ~/run.log ~/run.done; \
+  nohup bash -c '<your-command>; echo EXIT=\$? > ~/run.done' \
+  > ~/run.log 2>&1 < /dev/null & disown; echo STARTED"
+```
+
+**Then poll with short calls (each completes in <5 s, well under the kill window):**
+
+```bash
+wsl -d Ubuntu bash -lc \
+  "if [ -f ~/run.done ]; then cat ~/run.done; tail -40 ~/run.log; \
+   else echo RUNNING; tail -3 ~/run.log; fi"
+```
+
+The detached process reparents to `init` (PID 1) and runs to completion in the long-lived WSL VM regardless of whether any `wsl.exe` host process is currently attached. The poll calls are short enough that they never hit the kill window.
+
+### 17.2 What does NOT work
+
+Each of these alone is insufficient and was empirically falsified during prompt 1.2.b:
+
+- `vmIdleTimeout=-1` (already set; the VM stays up but the foreground call still gets killed).
+- `cd /c/Users/dchit && wsl …` to move Git Bash off the UNC share (does not affect the kill — the kill is a WSL-service action, not an SMB-session action).
+- `nohup`, `setsid`, `disown` *inside* a still-foreground `wsl` invocation (the host call blocks waiting for the bash session to exit, and the kill fires before that).
+- `Monitor` tailing a log via the Bash tool while the foreground call is running (the foreground call still gets killed).
+
+Only `nohup … & disown; echo STARTED` followed by polling works reliably.
+
+### 17.3 When to use it
+
+- `make test-lineage`, `make test-integration`, `make test` — anything > 60 s.
+- Any one-off long pipeline run (full-data loader, baseline training, Optuna sweeps).
+
+Short commands (lint, typecheck, single-file unit tests, `git status`) run fine inline.
+
+---
+
+_End of CLAUDE.md. Last updated: Sprint 1 prompt 1.2.b — added §17 WSL long-running-command pattern (and the §15 reminder pointing at it)._
