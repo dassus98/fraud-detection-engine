@@ -1,0 +1,61 @@
+# Curated allow / deny lists for `EmailDomainExtractor` and the
+# `missing_indicator_threshold` for `MissingIndicatorGenerator`.
+#
+# All entries are lowercase exact-match against the `*_emaildomain`
+# column post-cleaner normalisation (the cleaner already lowercases +
+# strips, so no case folding is needed at lookup time).
+#
+# Lists below are conservative — Sprint 2 may extend them based on
+# Sprint 4's economic-cost analysis of email-domain-driven false
+# positives.
+
+free_providers:
+  - gmail.com
+  - yahoo.com
+  - hotmail.com
+  - outlook.com
+  - aol.com
+  - icloud.com
+  - mail.com
+  - protonmail.com
+  - tutanota.com
+  - zoho.com
+  - yandex.com
+  - gmx.com
+  - live.com
+  - msn.com
+  - me.com
+  - mac.com
+  - fastmail.com
+  - hushmail.com
+  - inbox.com
+  - rocketmail.com
+  - rediffmail.com
+  - mail.ru
+  - qq.com
+  - 163.com
+  - 126.com
+
+disposable_providers:
+  - guerrillamail.com
+  - tempmail.com
+  - 10minutemail.com
+  - mailinator.com
+  - throwawaymail.com
+  - yopmail.com
+  - dispostable.com
+  - getnada.com
+  - tempinbox.com
+  - mintemail.com
+  - sharklasers.com
+  - maildrop.cc
+  - tempr.email
+  - trashmail.com
+  - fakemailgenerator.com
+
+# Threshold the `MissingIndicatorGenerator` uses at fit time to decide
+# which columns earn an `is_null_{col}` indicator. Per CLAUDE.md §5.4
+# this lives in config rather than as a magic number in source.
+# Sharing the YAML with the email lists is mildly unusual semantically
+# but follows the 2.1.c spec wording verbatim.
+missing_indicator_threshold: 0.05
