@@ -77,21 +77,14 @@ _VAL_FILENAME: Final[str] = "val.parquet"
 _TEST_FILENAME: Final[str] = "test.parquet"
 _MANIFEST_FILENAME: Final[str] = "splits_manifest.json"
 
-# Step names for the JSONL lineage records. Pinned at module scope so
-# `verify_lineage.py` can import the canonical list rather than restate it.
+# Step names for the JSONL lineage records. `verify_lineage.py` pins
+# the same five strings independently — duplication is intentional so
+# the verifier is a regression detector, not a derivative of this file.
 _STEP_LOAD: Final[str] = "load_merged"
 _STEP_CLEAN: Final[str] = "interim_clean"
 _STEP_SPLIT_TRAIN: Final[str] = "split_train"
 _STEP_SPLIT_VAL: Final[str] = "split_val"
 _STEP_SPLIT_TEST: Final[str] = "split_test"
-
-EXPECTED_STEPS: Final[tuple[str, ...]] = (
-    _STEP_LOAD,
-    _STEP_CLEAN,
-    _STEP_SPLIT_TRAIN,
-    _STEP_SPLIT_VAL,
-    _STEP_SPLIT_TEST,
-)
 
 
 def _make_load_step(loader: RawDataLoader) -> Callable[[pd.DataFrame], pd.DataFrame]:

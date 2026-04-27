@@ -195,12 +195,7 @@ class LineageLog:
             Path is computed on every access; the file may or may
             not exist yet.
         """
-        return (
-            self._settings.logs_dir
-            / _LINEAGE_DIR_NAME
-            / self._run_id
-            / _LINEAGE_FILENAME
-        )
+        return self._settings.logs_dir / _LINEAGE_DIR_NAME / self._run_id / _LINEAGE_FILENAME
 
     def append(self, step: LineageStep) -> None:
         """Append one `LineageStep` as a single JSONL line.
@@ -222,21 +217,34 @@ class LineageLog:
         with target.open("a", encoding=_FINGERPRINT_ENCODING) as f:
             f.write(line + "\n")
 
-    def read(self) -> list[LineageStep]:
-        """Round-trip the JSONL file back into a list of dataclasses.
+    @classmethod
+    def read(cls, run_id: str, settings: Settings | None = None) -> list[LineageStep]:
+        """Round-trip the JSONL file for `run_id` into a list of dataclasses.
 
-        Useful for tests and ad-hoc forensics; not used by the
-        pipeline at runtime. Returns an empty list if the file does
-        not yet exist (e.g. constructor called but no `append` yet).
+        Stateless reader — does not require an existing `LineageLog`
+        instance. Constructs one internally to derive the path; the
+        constructor is I/O-free, so this is cheap. Returns an empty
+        list if the backing file is absent or empty.
+
+        Useful for tests, ad-hoc forensics (`scripts/verify_lineage.py`),
+        and any future callsite that wants to read without committing to
+        a write loop.
+
+        Args:
+            run_id: Pipeline-run UUID4 hex whose lineage trail should
+                be loaded.
+            settings: Override for the `Settings` singleton. Tests
+                pass a `tmp_path`-rooted instance.
 
         Returns:
             Step records in append order. An empty list if the
             backing file is absent or empty.
         """
-        if not self.path.exists():
+        instance = cls(run_id, settings)
+        if not instance.path.exists():
             return []
         steps: list[LineageStep] = []
-        for line in self.path.read_text(encoding=_FINGERPRINT_ENCODING).splitlines():
+        for line in instance.path.read_text(encoding=_FINGERPRINT_ENCODING).splitlines():
             if not line.strip():
                 continue
             payload: dict[str, Any] = json.loads(line)
@@ -364,8 +372,7 @@ def _find_dataframe(args: tuple[Any, ...]) -> pd.DataFrame:
         if isinstance(arg, pd.DataFrame):
             return arg
     raise TypeError(
-        "lineage_step expected at least one pd.DataFrame in positional "
-        "args; none was found"
+        "lineage_step expected at least one pd.DataFrame in positional " "args; none was found"
     )
 
 

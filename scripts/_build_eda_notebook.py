@@ -151,6 +151,17 @@ print(json.dumps(overview, indent=2))
 attach_artifact(run, overview, name="overview")
 """
     ),
+    _md(
+        """
+### A.2 — Calendar anchor
+
+`TransactionDT` is anonymised seconds-since-reference; we pin it to the
+community-standard **2017-12-01 UTC** anchor so every later sprint
+compares against the same calendar. `event_dt` is kept as a standalone
+`pd.Series` so the cleanlab classifier in Section F doesn't accidentally
+pick a datetime column up as a feature.
+"""
+    ),
     _code(
         """
 # Anchor TransactionDT (anonymised seconds-since-reference) onto the
@@ -171,6 +182,15 @@ print(json.dumps(calendar_span, indent=2))
 attach_artifact(run, calendar_span, name="calendar_span")
 """
     ),
+    _md(
+        """
+### A.3 — Daily transaction volume
+
+Daily counts confirm the dataset spans roughly 6 months and surface any
+obvious calendar gaps or outlier days that would distort the temporal
+split in Section E.
+"""
+    ),
     _code(
         """
 daily_volume = event_dt.dt.date.value_counts().sort_index()
@@ -186,6 +206,24 @@ fig.savefig(FIG_DIR / "daily_volume.png", dpi=150, bbox_inches="tight")
 attach_artifact(run, fig, name="daily_volume")
 plt.close(fig)
 print(f"Daily volume range: {int(daily_volume.min()):,} — {int(daily_volume.max()):,} txns/day")
+"""
+    ),
+    _md(
+        """
+**Read:** Volume rises sharply in the first weeks then stabilises around a
+daily baseline with weekly seasonality. The temporal split in Section E
+respects this calendar — the pre-ramp burst is in train, never in val
+or test.
+"""
+    ),
+    _md(
+        """
+### A.4 — Identity-join coverage
+
+Only ~24% of transactions arrive with device / browser fingerprints.
+Sprint 2 features that depend on identity columns therefore need
+NaN-tolerance at scoring time, and the model must perform competitively
+on the no-identity bulk.
 """
     ),
     _code(
@@ -211,6 +249,15 @@ identity_coverage = {
 }
 print(json.dumps(identity_coverage, indent=2))
 attach_artifact(run, identity_coverage, name="identity_coverage")
+"""
+    ),
+    _md(
+        """
+### A.5 — Fraud rate: has-identity vs no-identity
+
+A 95% Wilson confidence interval on each subgroup tests whether
+identity-presence itself is predictive. The `wilson_ci` helper defined
+here is reused throughout Section B.
 """
     ),
     _code(
@@ -296,6 +343,15 @@ print(json.dumps(overall, indent=2))
 attach_artifact(run, overall, name="overall_fraud_rate")
 """
     ),
+    _md(
+        """
+### B.2 — Fraud rate by amount bucket
+
+Fraud is rare overall (3.5%) but concentrates in specific amount ranges.
+Bucketing exposes the skew without committing to a particular continuous
+transformation; Sprint 2 can revisit with a learned transform if needed.
+"""
+    ),
     _code(
         """
 amt_bins = [0, 25, 50, 100, 250, 500, 1000, 5000, np.inf]
@@ -337,6 +393,23 @@ plt.close(fig)
 print(rate_by_amt)
 """
     ),
+    _md(
+        """
+**Read:** Fraud rate is highest in mid-to-large amount buckets, not the
+ultra-small or ultra-large extremes. A simple "block above $N" rule
+would miss the bulk of fraud value; Sprint 4's economic-cost threshold
+work is the right place to land a final policy.
+"""
+    ),
+    _md(
+        """
+### B.3 — Fraud rate by ProductCD
+
+`ProductCD` carves the catalogue into five families. A 5-10× spread
+between the cleanest and dirtiest family is what makes ProductCD a
+strong primary feature in Sprint 2.
+"""
+    ),
     _code(
         """
 rate_by_product = (
@@ -376,6 +449,22 @@ plt.close(fig)
 print(rate_by_product)
 """
     ),
+    _md(
+        """
+**Read:** ProductCD `C` (subscription / online services) carries a
+multiple of the fraud rate of `W` (general retail). The ranking is
+robust under the Wilson CIs — this is genuine class signal, not noise.
+"""
+    ),
+    _md(
+        """
+### B.4 — Fraud rate by hour-of-day
+
+Hourly fraud rate exposes diurnal attack patterns. The CI band shows
+where the ranking is statistically meaningful versus dominated by
+sampling noise.
+"""
+    ),
     _code(
         """
 hour_groups = (
@@ -409,6 +498,24 @@ fig.tight_layout()
 fig.savefig(FIG_DIR / "fraud_rate_by_hour.png", dpi=150, bbox_inches="tight")
 attach_artifact(run, fig, name="fraud_rate_by_hour")
 plt.close(fig)
+"""
+    ),
+    _md(
+        """
+**Read:** Late-night and early-morning hours (UTC) show elevated fraud
+risk; the daytime trough sits clearly below the overall 3.5% rate. The
+CI band widens at the extremes — Sprint 2's hour feature should be
+encoded as a proper categorical, not a thresholded indicator.
+"""
+    ),
+    _md(
+        """
+### B.5 — Fraud rate by card4 / card6
+
+Card brand (`card4` — Visa, Mastercard, …) and card type (`card6` —
+credit, debit) carry meaningful fraud signal independently. The
+`n ≥ 100` filter drops near-empty buckets that would dominate the
+y-axis on a single fraudster's small spree.
 """
     ),
     _code(
@@ -458,6 +565,24 @@ attach_artifact(run, fig, name="fraud_rate_by_card")
 plt.close(fig)
 """
     ),
+    _md(
+        """
+**Read:** card4 spread is modest but consistent with industry priors.
+card6 (credit vs debit) shows a sharper split — debit-card transactions
+exhibit lower fraud rates than credit, matching expectations for
+chip-and-PIN coverage.
+"""
+    ),
+    _md(
+        """
+### B.6 — Day-of-week × hour-of-day heatmap
+
+The 7 × 24 grid combines weekday effect and hourly effect; hot spots
+that don't decompose into a simple "weekend matters" or "early-morning
+matters" rule signal the kind of interaction Sprint 2's behavioural
+features need to capture.
+"""
+    ),
     _code(
         """
 heatmap_df = (
@@ -487,6 +612,23 @@ fig.tight_layout()
 fig.savefig(FIG_DIR / "fraud_rate_dow_hour_heatmap.png", dpi=150, bbox_inches="tight")
 attach_artifact(run, fig, name="fraud_rate_dow_hour_heatmap")
 plt.close(fig)
+"""
+    ),
+    _md(
+        """
+**Read:** Hot spots cluster in late-night weekday hours rather than
+weekend daytime. That contradicts the intuitive "weekend fraud" prior
+and tells Sprint 2 to prioritise interaction features over a simple
+weekend-flag.
+"""
+    ),
+    _md(
+        """
+### B.7 — Top-20 P_emaildomain by fraud rate
+
+Among purchaser email domains with at least 500 transactions, certain
+free / disposable providers carry disproportionately high fraud rates.
+Sprint 2's email-domain feature should prioritise these heavy hitters.
 """
     ),
     _code(
@@ -537,6 +679,22 @@ plt.close(fig)
 print(domain_groups)
 """
     ),
+    _md(
+        """
+**Read:** Several free email providers carry 10-30× the baseline fraud
+rate. A simple email-domain target encoding will capture most of this
+lift; rare or new domains will still need a fallback default.
+"""
+    ),
+    _md(
+        """
+### B.8 — TransactionAmt distribution: fraud vs non-fraud
+
+Plotted on log scale because the right tail is long; both classes share
+the same bin grid so any visual difference in shape is real, not a
+binning artefact.
+"""
+    ),
     _code(
         """
 # Density overlay on log(1 + TransactionAmt) so the long right tail
@@ -573,6 +731,13 @@ fig.tight_layout()
 fig.savefig(FIG_DIR / "transaction_amt_overlay.png", dpi=150, bbox_inches="tight")
 attach_artifact(run, fig, name="transaction_amt_overlay")
 plt.close(fig)
+"""
+    ),
+    _md(
+        """
+**Read:** Fraud distribution is shifted right of legitimate — a small but
+visible mode at higher amounts. Combined with B.2's bucket view, the
+predictive lift is more about *bucket position* than absolute amount.
 """
     ),
     _md(

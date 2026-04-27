@@ -116,3 +116,62 @@ The most-recent lineage run (`4e75a21749ed4d93ac5926f50d29e326`) carries all 5 e
 **Sprint 1 is gated GREEN.** All verification commands return 0; the lineage-data layer is clean and reproducible; the temporal baseline beats expectations. The single deviation (temporal AUC 0.9247 vs. the spec's 0.88–0.91 estimate) is a positive surprise, not a regression — flagged here so Sprint 2's planning uses the actual anchor.
 
 Ready for John to commit on `sprint-1/sprint-gate`.
+
+---
+
+## Post-audit re-verification (2026-04-27)
+
+After the comprehensive audit pass on `sprint-1/audit-and-gap-fill` — which touched 7 source / test / notebook / config files plus added the rolling `sprints/sprint_1/audit_findings.md` — the full Sprint 1 verification protocol was re-run. **Every gate is still green.**
+
+### Verification results
+
+| Gate | Pre-audit (PR #9) | Post-audit |
+|---|---|---|
+| `make lint` | All checks passed | All checks passed |
+| `make typecheck` | 23 source files | 23 source files |
+| `make test` (pytest unit + integration + lineage) | 233 passed in 253.74s | **235 passed** in 213.12s |
+| `make nb-test` (nbmake harness) | 2 passed in 72.56s | 2 passed in 68.55s |
+| `verify_lineage.py` | GREEN, 5 steps | GREEN, 5 steps |
+| `nbconvert 01_eda.ipynb` | 117,055 bytes | **124,237 bytes** (+7 KB) |
+| `run_sprint1_baseline.py` | 110.37s wall, 2 MLflow runs | 105.40s wall, 2 MLflow runs |
+
+### Test count delta: +2
+
+The two new tests are both from the 1.2.a audit, both in `tests/unit/test_splits.py::TestValidateNoOverlap`:
+
+- `test_rejects_val_test_temporal_overlap` — covers `splits.py:243` (the val↔test contiguity branch the original suite missed; existing test only covered train↔val)
+- `test_rejects_split_size_mismatch` — covers `splits.py:226` (manifest-sum vs ID-set-sum branch — defends against a caller bypassing `temporal_split` and constructing a malformed `SplitFrames` directly)
+
+`splits.py` coverage: **95% → 100%** (70/70 stmts, 18/18 branches). The 1.3 audit also expanded `tests/unit/test_baseline.py::TestMLflowLogging` (renamed `test_logs_auc_metric` → `test_logs_train_and_val_metrics`, asserting all 6 MLflow metrics + `BaselineResult` field cross-checks) — but that's a test rename, not a count change.
+
+### Notebook size delta: +7 KB
+
+`notebooks/01_eda.ipynb` grew from 117,055 → 124,237 bytes (+7,182 bytes). Source: 19 new markdown cells added in the 1.1.a audit — 5 in Section A (4 intro mds + 1 per-plot interp) + 14 in Section B (7 intro mds + 7 per-plot interps). The cells satisfy the 1.1.a spec wording *"every code cell has a markdown cell above it explaining what we're looking at and why"* and *"every plot has … a 1-sentence interpretation below it"* — both were structurally missing in the original PR #1 delivery despite the substantive content being correct.
+
+### AUC numbers: bit-identical
+
+Random AUC = 0.9615, temporal AUC = 0.9247. Match the pre-audit numbers exactly down to the floating-point digit, which confirms **no model behaviour changed** during the audit — every code change was either (a) docstring / comment, (b) test addition or rename, (c) classmethod conversion (functionally equivalent), (d) markdown cells in the notebook, (e) gitignore exception. The model's training loop, hyperparameters, and feature-column selection are all untouched.
+
+### What the audit branch contributes vs `main`
+
+| File | Change | Audit prompt |
+|---|---|---|
+| `.gitignore` | Surgical `!/reports/sprint1_eda_summary.md` exception so the executive-summary file is now tracked (was gitignored despite being a 1.1.c "Produces" deliverable) | 1.1.c |
+| `notebooks/01_eda.ipynb` | Regenerated; +7 KB from 19 new markdown cells in Sections A and B | 1.1.a |
+| `notebooks/00_observability_demo.ipynb` | Re-executed in place by `make notebooks` (output cells refreshed) | 1.1.a side-effect |
+| `scripts/_build_eda_notebook.py` | +19 markdown cells in Sections A + B (intros above each code cell + interps below each plot) | 1.1.a |
+| `scripts/build_interim.py` | Removed unused public `EXPECTED_STEPS` constant (CLAUDE.md §5.7 dead code rule) | 1.2.d |
+| `scripts/verify_lineage.py` | Collapsed `LineageLog(...).read()` 2-line pattern to single classmethod call; updated stale comment that referenced the now-removed `EXPECTED_STEPS` | 1.2.c, 1.2.d |
+| `src/fraud_engine/data/cleaner.py` | Docstring clarification on `clean()` warning future callers about the `optimize=False` requirement and the exact `SchemaErrors` failure mode | 1.2.b |
+| `src/fraud_engine/data/lineage.py` | `LineageLog.read` converted from instance method to `@classmethod` per the original spec wording (divergence not flagged in PR #6's report) | 1.2.c |
+| `tests/unit/test_baseline.py` | Renamed `test_logs_auc_metric` → `test_logs_train_and_val_metrics`; expanded body from 1 metric assertion to 6 + dataclass-field cross-check + sanity bounds | 1.3 |
+| `tests/unit/test_lineage.py` | 5 call sites switched to classmethod; one obsolete `log = LineageLog(...)` line removed | 1.2.c |
+| `tests/unit/test_splits.py` | +2 tests in `TestValidateNoOverlap` (val↔test temporal overlap + manifest size mismatch) closing the 95% → 100% coverage gap | 1.2.a |
+| `tests/lineage/test_interim_lineage.py` | 3 call sites switched to classmethod; docstring reference updated | 1.2.c |
+| `reports/sprint1_eda_summary.md` | Two stale captions fixed (lines 23 + 235); both still described the *daily / 7-day rolling* plot from 1.1.a after Section E switched to the *weekly + Wilson-CI* plot in 1.1.c. **Now tracked** under the new `.gitignore` exception | 1.1.c |
+| `sprints/sprint_1/audit_findings.md` | New rolling audit log (one section per audited prompt: 1.1.a, 1.1.b, 1.1.c, 1.2.a, 1.2.b, 1.2.c, 1.2.d, 1.3) | this audit |
+| `sprints/sprint_1/sprint_1_gate.md` | Appended this **Post-audit re-verification** section | this gate |
+
+### Conclusion (post-audit)
+
+**Sprint 1 final gate: GREEN.** Comprehensive audit closed real gaps in 6 of the 8 audited prompts (1.1.a, 1.1.c, 1.2.a, 1.2.b, 1.2.c, 1.2.d, 1.3 — only 1.1.b was already to spec) without changing model behaviour. Test count up 2; coverage on `splits.py` up to 100%; the executive-summary deliverable is now actually committed (was previously local-only); and a real classmethod-vs-instance-method API divergence in the lineage primitive was corrected to match the spec. Ready for Sprint 2.

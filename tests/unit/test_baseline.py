@@ -152,15 +152,32 @@ class TestMLflowLogging:
         assert (runs["tags.variant"] == "random").any()
         assert (runs["tags.stage"] == "sprint1_baseline").any()
 
-    def test_logs_auc_metric(self, baseline_settings: Settings) -> None:
+    def test_logs_train_and_val_metrics(self, baseline_settings: Settings) -> None:
+        """Six metrics (auc + auc_pr + log_loss, on {train, val}) are logged
+        to MLflow AND carried as fields on `BaselineResult`. Cross-checks
+        the two surfaces — protects against a future change that adds a
+        metric to one side but forgets the other.
+        """
         df = _make_synthetic_merged()
         result = train_baseline(df, variant="temporal", settings=baseline_settings)
         runs = mlflow.search_runs(
             experiment_names=[baseline_settings.mlflow_experiment_name],
         )
         # The first (most recent) row should be our temporal run.
-        auc_logged = float(runs.iloc[0]["metrics.auc"])
-        assert auc_logged == pytest.approx(result.auc)
+        row = runs.iloc[0]
+        # `auc` (un-suffixed) is the val ROC-AUC, kept un-suffixed for
+        # back-compat. The other five metrics carry their slice suffix.
+        assert float(row["metrics.auc"]) == pytest.approx(result.auc)
+        assert float(row["metrics.auc_pr_val"]) == pytest.approx(result.auc_pr)
+        assert float(row["metrics.log_loss_val"]) == pytest.approx(result.log_loss)
+        assert float(row["metrics.auc_train"]) == pytest.approx(result.auc_train)
+        assert float(row["metrics.auc_pr_train"]) == pytest.approx(result.auc_pr_train)
+        assert float(row["metrics.log_loss_train"]) == pytest.approx(result.log_loss_train)
+        # Sanity bounds on the dataclass fields themselves.
+        for auc_value in (result.auc, result.auc_pr, result.auc_train, result.auc_pr_train):
+            assert 0.0 <= auc_value <= 1.0
+        assert result.log_loss > 0
+        assert result.log_loss_train > 0
 
 
 class TestModelArtefact:
