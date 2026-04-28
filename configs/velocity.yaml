@@ -1,0 +1,21 @@
+# Velocity-counter configuration. Drives `VelocityCounter` defaults
+# in `src/fraud_engine/features/tier2_aggregations.py`.
+#
+# Entity columns must exist in the cleaner's output schema (see
+# `src/fraud_engine/schemas/raw.py` and `interim.py`). Adding a new
+# entity here automatically adds `len(windows)` velocity columns to
+# every Sprint 3+ training set.
+
+entities:
+  - card1            # primary card identifier; populated for every row
+  - addr1            # billing-address bucket; nullable
+  - DeviceInfo       # device fingerprint; nullable (~76% null per EDA)
+  - P_emaildomain    # purchaser email provider; nullable
+
+# Lookback windows. Map of human-readable label -> seconds.
+# Column names land as `{entity}_velocity_{label}` — the label is
+# the part used downstream, so keep them short and unambiguous.
+windows:
+  "1h": 3600
+  "24h": 86400
+  "7d": 604800
