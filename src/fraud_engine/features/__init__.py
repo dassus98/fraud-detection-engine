@@ -6,6 +6,8 @@ Public surface:
     TemporalSafeGenerator: row-iterating ABC subclass that is leak-free
         by construction. Reference shape for tier 2-5 vectorized
         generators.
+    VelocityCounter: Tier-2 deque-based per-entity transaction counts
+        over fixed lookback windows. Canonical fraud signal.
     assert_no_future_leak: sample-based test helper that catches
         look-ahead leakage in any time-windowed feature.
 """
@@ -18,10 +20,12 @@ from fraud_engine.features.temporal_guards import (
     TemporalSafeGenerator,
     assert_no_future_leak,
 )
+from fraud_engine.features.tier2_aggregations import VelocityCounter
 
 __all__ = [
     "BaseFeatureGenerator",
     "FeaturePipeline",
     "TemporalSafeGenerator",
+    "VelocityCounter",
     "assert_no_future_leak",
 ]
