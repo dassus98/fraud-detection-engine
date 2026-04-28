@@ -199,6 +199,41 @@ class TestGetSettingsCache:
 # ---------------------------------------------------------------------
 
 
+class TestRelativePathResolution:
+    """Relative `data_dir` / `models_dir` / `logs_dir` overrides resolve
+    against the project root, not the runtime CWD.
+
+    The bug this guards against: Jupyter / VS Code launch a notebook
+    kernel whose CWD is `notebooks/`. With a `.env` carrying
+    `DATA_DIR=./data`, the relative path resolved against CWD points
+    to `notebooks/data/` (no MANIFEST.json there), and every cell that
+    reads from `data_dir` blows up with a confusing "data not
+    downloaded" error.
+    """
+
+    def test_relative_data_dir_resolves_to_project_root(self) -> None:
+        """A relative `data_dir` is rebased onto the project root, not CWD."""
+        settings = _build(data_dir=Path("./data"))
+        assert settings.data_dir.is_absolute()
+        # The resolved path ends with `/data` and starts at the project
+        # root (which contains `pyproject.toml`).
+        assert settings.data_dir.name == "data"
+        assert (settings.data_dir.parent / "pyproject.toml").is_file()
+
+    @pytest.mark.parametrize("field", ["data_dir", "models_dir", "logs_dir"])
+    def test_relative_path_resolves_for_every_path_field(self, field: str) -> None:
+        """All three path fields share the validator."""
+        settings = _build(**{field: Path("./some_relative_dir")})
+        resolved: Path = getattr(settings, field)
+        assert resolved.is_absolute()
+        assert resolved.name == "some_relative_dir"
+
+    def test_absolute_path_passes_through_unchanged(self, tmp_path: Path) -> None:
+        """An absolute `data_dir` (e.g. an NFS mount) is left alone."""
+        settings = _build(data_dir=tmp_path)
+        assert settings.data_dir == tmp_path
+
+
 class TestEnsureDirectories:
     def test_creates_full_tree(self, tmp_path: Path) -> None:
         settings = _build(

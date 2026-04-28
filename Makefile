@@ -38,11 +38,11 @@ test-lineage:  ## Run schema-lineage tests.
 	uv run python -m pytest tests/lineage
 
 nb-test:  ## Execute notebooks end-to-end via nbmake (catches util-rename drift).
-	DATA_DIR=$(CURDIR)/data uv run python -m pytest --no-cov --nbmake notebooks
+	uv run python -m pytest --no-cov --nbmake notebooks
 
 notebooks:  ## Rebuild + execute every committable notebook in place (commit-ready).
 	uv run python scripts/_build_eda_notebook.py
-	DATA_DIR=$(CURDIR)/data uv run jupyter nbconvert --to notebook --execute --inplace notebooks/00_observability_demo.ipynb
+	uv run jupyter nbconvert --to notebook --execute --inplace notebooks/00_observability_demo.ipynb
 
 data-download:  ## Fetch IEEE-CIS from Kaggle into data/raw/ and write the manifest.
 	uv run python scripts/download_data.py

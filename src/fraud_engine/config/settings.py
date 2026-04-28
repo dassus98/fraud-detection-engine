@@ -307,6 +307,34 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator("data_dir", "models_dir", "logs_dir")
+    @classmethod
+    def _resolve_relative_to_project_root(cls, value: Path) -> Path:
+        """Resolve relative path overrides against the project root, not CWD.
+
+        Without this, a relative path from `.env` (e.g. `DATA_DIR=./data`)
+        resolves against the *current working directory at runtime*. That
+        breaks any caller whose CWD is not the project root — most
+        visibly the Jupyter / VS Code notebook kernel, whose CWD is
+        usually `notebooks/` and which would resolve `./data` to
+        `notebooks/data` (no MANIFEST.json there).
+
+        Absolute paths pass through unchanged so a user can still point
+        `DATA_DIR` at an external mount or NFS share.
+
+        Args:
+            value: The user-supplied path (from .env, env var, or
+                explicit kwarg). May be absolute or relative.
+
+        Returns:
+            An absolute, resolved Path. Relative inputs are joined
+            against `_PROJECT_ROOT` (the path of this file's package
+            tree), then resolved.
+        """
+        if value.is_absolute():
+            return value
+        return (_PROJECT_ROOT / value).resolve()
+
     # ---------------------------------------------------------------
     # derived paths
     # ---------------------------------------------------------------
