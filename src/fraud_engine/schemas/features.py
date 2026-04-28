@@ -117,6 +117,14 @@ _VELOCITY_WINDOWS: Final[tuple[str, ...]] = ("1h", "24h", "7d")
 # `TargetEncoder` defaults: 3 categorical columns.
 _TARGET_ENC_COLUMNS: Final[tuple[str, ...]] = ("card4", "addr1", "P_emaildomain")
 
+# ---------------- Tier-3 column-range constants ---------------- #
+#
+# `BehavioralDeviation.hour_deviation` = `abs(current_hour − card mean
+# hour)`. `cleaner.hour_of_day ∈ [0, 23]`, so the deviation lies in
+# [0, 24). Schema bound is closed on the left and open on the right.
+_HOUR_DEV_MIN: Final[float] = 0.0
+_HOUR_DEV_MAX: Final[float] = 24.0
+
 
 TierOneFeaturesSchema: Final[DataFrameSchema] = InterimTransactionSchema.add_columns(
     {
@@ -229,8 +237,55 @@ TierTwoFeaturesSchema: Final[DataFrameSchema] = TierOneFeaturesSchema.add_column
 )
 
 
+TierThreeFeaturesSchema: Final[DataFrameSchema] = TierTwoFeaturesSchema.add_columns(
+    {
+        # ---------------- BehavioralDeviation ---------------- #
+        # Z-scores: nullable=False (first-event fallback is 0.0; never
+        # NaN per 2.3.a's design). Tail-bounded only by the data;
+        # no Check.in_range so long-tailed cards don't fire spurious
+        # validation errors.
+        "amt_zscore_vs_card1_history": Column(float, nullable=False, required=True),
+        "time_since_last_txn_zscore": Column(float, nullable=False, required=True),
+        # Flags: int 0/1, nullable=False.
+        "addr_change_flag": Column(
+            int,
+            Check.isin(_BINARY_VALUES),
+            nullable=False,
+            required=True,
+        ),
+        "device_change_flag": Column(
+            int,
+            Check.isin(_BINARY_VALUES),
+            nullable=False,
+            required=True,
+        ),
+        # Hour deviation: float ∈ [0, 24). 0 = first-event fallback.
+        "hour_deviation": Column(
+            float,
+            Check.in_range(
+                _HOUR_DEV_MIN,
+                _HOUR_DEV_MAX,
+                include_min=True,
+                include_max=False,
+            ),
+            nullable=False,
+            required=True,
+        ),
+        # ---------------- ColdStartHandler ---------------- #
+        # Flag: int 0/1, nullable=False (NaN entity → 1 deterministically).
+        "is_coldstart_card1": Column(
+            int,
+            Check.isin(_BINARY_VALUES),
+            nullable=False,
+            required=True,
+        ),
+    }
+)
+
+
 __all__ = [
     "FEATURE_SCHEMA_VERSION",
     "TierOneFeaturesSchema",
+    "TierThreeFeaturesSchema",
     "TierTwoFeaturesSchema",
 ]
