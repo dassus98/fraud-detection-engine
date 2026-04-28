@@ -70,23 +70,49 @@ from fraud_engine.features.base import BaseFeatureGenerator
 # temporal operations by `TransactionDT` (int seconds).
 _DEFAULT_TIMESTAMP_COL: Final[str] = "TransactionDT"
 
-# Default config filename. Path resolved at load time against the
-# repo root so the generator works regardless of caller CWD.
-_DEFAULT_CONFIG_FILENAME: Final[str] = "velocity.yaml"
+# Default amount column for `HistoricalStats`. Same value used by
+# `tier1_basic.AmountTransformer`; pinned constant so a future schema
+# rename (e.g. `transaction_amount`) updates exactly one place.
+_TRANSACTION_AMT_COLUMN: Final[str] = "TransactionAmt"
+
+# Per-class config filenames. Both classes share the resolver helper
+# below; the constants are defined here so a rename touches one place.
+_VELOCITY_CONFIG_FILENAME: Final[str] = "velocity.yaml"
+_HISTORICAL_STATS_CONFIG_FILENAME: Final[str] = "historical_stats.yaml"
+
+# Sample-vs-population std: pandas defaults to ddof=1 (sample); numpy
+# defaults to ddof=0 (population). We follow pandas because every
+# downstream consumer (Sprint 3 LightGBM, Sprint 4 evaluation) reads
+# stats produced by `pd.Series.std()` and the contract should match.
+_STD_DDOF: Final[int] = 1
+
+# Stats supported by `HistoricalStats`. Adding more (e.g. `min`,
+# `median`, `count_distinct`) requires extending the dispatch table
+# inside `HistoricalStats.transform`.
+_SUPPORTED_STATS: Final[frozenset[str]] = frozenset({"mean", "std", "max"})
+
+# Sample std requires at least this many observations. Below the
+# threshold `pd.Series.std(ddof=1)` returns NaN, so `HistoricalStats`
+# leaves the default NaN in place to match.
+_MIN_SAMPLES_FOR_STD: Final[int] = 2
 
 
-def _resolve_default_config_path() -> Path:
-    """Locate `configs/velocity.yaml` relative to the repo root.
+def _resolve_config_path(filename: str) -> Path:
+    """Resolve `configs/{filename}` relative to the repo root.
 
     Mirrors `tier1_basic._resolve_default_config_path` — this file
     lives at `src/fraud_engine/features/tier2_aggregations.py`, so
-    the repo root is three parents up.
+    the repo root is three parents up. Filename-parameterised so
+    every Tier-2 generator can share one resolver.
+
+    Args:
+        filename: Bare filename under `configs/` (e.g. `velocity.yaml`).
 
     Returns:
-        Absolute path to the default velocity YAML.
+        Absolute path to the requested YAML.
     """
     project_root = Path(__file__).resolve().parents[3]
-    return project_root / "configs" / _DEFAULT_CONFIG_FILENAME
+    return project_root / "configs" / filename
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -163,7 +189,7 @@ class VelocityCounter(BaseFeatureGenerator):
                 tests; production code uses the default.
         """
         if entity_cols is None or windows is None:
-            cfg = _load_yaml(config_path or _resolve_default_config_path())
+            cfg = _load_yaml(config_path or _resolve_config_path(_VELOCITY_CONFIG_FILENAME))
             yaml_entities: Sequence[str] = cfg.get("entities", [])
             yaml_windows: Mapping[str, int] = cfg.get("windows", {})
         else:
@@ -307,4 +333,265 @@ class VelocityCounter(BaseFeatureGenerator):
         )
 
 
-__all__ = ["VelocityCounter"]
+class HistoricalStats(BaseFeatureGenerator):
+    """Per-entity rolling mean / std / max of an amount column.
+
+    For each `(entity, window, stat)` triple, emits one column named
+    `{entity}_amt_{stat}_{window_label}` whose value at row R is the
+    statistic computed over the amount column for *strictly earlier*
+    same-entity rows whose timestamp falls within `window_seconds`
+    of R's timestamp.
+
+    Business rationale:
+        Mean / std / max summarise an entity's recent spending shape
+        in a way velocity counts cannot. A card whose past-30-day
+        mean is $40 suddenly seeing a $2000 transaction is far more
+        suspicious than the same card if its 30-day mean is $1500.
+        Sprint 3's LightGBM splits on these "expected behaviour"
+        features; Sprint 5's serving layer reuses the same
+        column-name contract over a Redis-backed timeline.
+
+    Trade-offs considered:
+        - **Recompute-from-deque vs running-state.** A running-mean +
+          running-sum-of-squares + monotonic-max-deque approach is
+          O(1) per push/pop, but the bookkeeping is fragile under
+          eviction (especially the max — needs a strict-monotonic
+          deque). The simpler approach: store `(timestamp, amount)`
+          in a per-entity deque and recompute statistics from a
+          numpy array on every read. With a 30 d window and typical
+          entity activity, deques stay small; numpy vectorises the
+          per-row stat call.
+        - **Sample std (ddof=1).** Matches `pd.Series.std()` so the
+          property test's pandas-based reference and the optimised
+          impl agree.
+        - **n=1 deque → std = NaN.** Sample std requires ≥ 2 points;
+          mean and max still return the single value.
+        - **NaN entity → NaN stats.** Different from
+          VelocityCounter's "0" — count of 0 is meaningful, mean of
+          0 over zero observations is misleading. NaN is the clean
+          "no data" indicator for LightGBM.
+        - **NaN amount → row not pushed.** Defensive against Sprint
+          5's serving layer ingesting an unvalidated payload; the
+          cleaner forbids NaN amounts in the train pipeline.
+        - **Tied-timestamp batching.** Identical two-pass pattern to
+          `VelocityCounter`: pass 1 reads from the deque (no tied
+          row sees another); pass 2 pushes every tied row's
+          `(ts, amt)` tuple.
+
+    Attributes:
+        entity_stats: ordered tuple of `(entity_name, tuple_of_stats)`.
+            Order pinned at construction so `get_feature_names()`
+            is deterministic.
+        windows: ordered tuple of `(label, seconds)` pairs.
+        amount_col: column to aggregate.
+        timestamp_col: temporal ordering column.
+    """
+
+    def __init__(
+        self,
+        entity_stats: Mapping[str, Sequence[str]] | None = None,
+        windows: Mapping[str, int] | None = None,
+        amount_col: str | None = None,
+        timestamp_col: str = _DEFAULT_TIMESTAMP_COL,
+        config_path: Path | None = None,
+    ) -> None:
+        """Construct the historical-stats generator.
+
+        Args:
+            entity_stats: Mapping of entity column -> stat names.
+                If `None`, read from the YAML's `entities` mapping.
+            windows: Mapping of window label -> seconds. If `None`,
+                read from the YAML's `windows`.
+            amount_col: Column to aggregate. If `None`, read from
+                YAML's `amount_col` (defaults to `TransactionAmt`).
+            timestamp_col: Temporal ordering column. Default
+                `"TransactionDT"`.
+            config_path: Override the default YAML path. Useful for
+                tests; production code uses the default.
+
+        Raises:
+            ValueError: If any declared stat is not in
+                `_SUPPORTED_STATS`.
+        """
+        if entity_stats is None or windows is None or amount_col is None:
+            cfg = _load_yaml(config_path or _resolve_config_path(_HISTORICAL_STATS_CONFIG_FILENAME))
+            yaml_entities: Mapping[str, Mapping[str, Any]] = cfg.get("entities", {})
+            yaml_windows: Mapping[str, int] = cfg.get("windows", {})
+            yaml_amount_col: str = cfg.get("amount_col", _TRANSACTION_AMT_COLUMN)
+        else:
+            yaml_entities = {}
+            yaml_windows = {}
+            yaml_amount_col = _TRANSACTION_AMT_COLUMN
+
+        if entity_stats is None:
+            chosen_entity_stats: list[tuple[str, tuple[str, ...]]] = [
+                (entity, tuple(spec.get("stats", []))) for entity, spec in yaml_entities.items()
+            ]
+        else:
+            chosen_entity_stats = [(e, tuple(s)) for e, s in entity_stats.items()]
+
+        chosen_windows: Mapping[str, int] = windows if windows is not None else yaml_windows
+        chosen_amount: str = amount_col if amount_col is not None else yaml_amount_col
+
+        # Validate stat names BEFORE storing — fail fast with a clear message.
+        for entity, stats in chosen_entity_stats:
+            unsupported = set(stats) - _SUPPORTED_STATS
+            if unsupported:
+                raise ValueError(
+                    f"HistoricalStats: entity {entity!r} declares unsupported "
+                    f"stats {sorted(unsupported)}; supported: {sorted(_SUPPORTED_STATS)}"
+                )
+
+        self.entity_stats: tuple[tuple[str, tuple[str, ...]], ...] = tuple(chosen_entity_stats)
+        self.windows: tuple[tuple[str, int], ...] = tuple(chosen_windows.items())
+        self.amount_col: str = chosen_amount
+        self.timestamp_col: str = timestamp_col
+
+    def fit(self, _df: pd.DataFrame) -> Self:
+        """Stateless: returns self.
+
+        State for online serving is reconstructed inside `transform`
+        per call. Sprint 5's online path will reuse `transform` over
+        a Redis-backed event log.
+        """
+        return self
+
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:  # noqa: PLR0912, PLR0915 — tied-group batching is a single algorithm; splitting across helpers would lose locality.
+        """Compute per-entity, per-window strictly-past statistics.
+
+        Algorithm (mirrors `VelocityCounter` but with a richer
+        deque payload):
+            1. Stable-sort by `timestamp_col`; pre-extract entity
+               and amount arrays in sorted order.
+            2. Iterate sorted positions, batching ties on timestamp.
+            3. For each tied group at timestamp T:
+               a. Pass 1 (stats): For each tied row × entity ×
+                  window, evict deque heads older than `T - secs`,
+                  build a numpy array of remaining amounts, dispatch
+                  the configured stats. NaN entity → leave NaN
+                  default; empty deque → leave NaN.
+               b. Pass 2 (push): Push every tied row's
+                  `(ts, amt)` tuple into the appropriate deques.
+                  Skip NaN amounts (defensive) and NaN entities.
+
+        Args:
+            df: Frame to transform. Must contain `self.timestamp_col`,
+                `self.amount_col`, and every entity column.
+
+        Returns:
+            `df.copy()` with one new column per (entity, stat, window)
+            triple, named `{entity}_amt_{stat}_{label}`.
+
+        Raises:
+            KeyError: If any required column is missing from `df`.
+        """
+        required = {
+            self.timestamp_col,
+            self.amount_col,
+            *(e for e, _ in self.entity_stats),
+        }
+        missing = sorted(required - set(df.columns))
+        if missing:
+            raise KeyError(f"HistoricalStats.transform: missing required column(s) {missing}")
+
+        feature_names = self.get_feature_names()
+        n = len(df)
+
+        timestamps = df[self.timestamp_col].to_numpy()
+        amounts = df[self.amount_col].to_numpy()
+        sort_idx = np.argsort(timestamps, kind="stable")
+        sorted_timestamps = timestamps[sort_idx]
+        sorted_amounts = amounts[sort_idx]
+        sorted_entities: dict[str, np.ndarray[Any, Any]] = {
+            entity: df[entity].to_numpy()[sort_idx] for entity, _ in self.entity_stats
+        }
+
+        # NaN default for every output cell.
+        results: dict[str, list[float]] = {name: [float("nan")] * n for name in feature_names}
+
+        # state[(entity, secs)][entity_value] = deque[(timestamp, amount)]
+        state: dict[tuple[str, int], dict[Any, deque[tuple[int, float]]]] = {
+            (entity, secs): defaultdict(deque)
+            for entity, _ in self.entity_stats
+            for _, secs in self.windows
+        }
+
+        i = 0
+        while i < n:
+            j = i
+            tie_value = sorted_timestamps[i]
+            while j < n and sorted_timestamps[j] == tie_value:
+                j += 1
+            ts_value = int(tie_value)
+
+            # Pass 1: compute stats from current deque contents.
+            for k in range(i, j):
+                orig_pos = int(sort_idx[k])
+                for entity, stats in self.entity_stats:
+                    entity_val = sorted_entities[entity][k]
+                    if pd.isna(entity_val):
+                        continue
+                    for label, secs in self.windows:
+                        d = state[(entity, secs)][entity_val]
+                        window_start = ts_value - secs
+                        while d and d[0][0] < window_start:
+                            d.popleft()
+                        if not d:
+                            continue
+                        arr = np.fromiter((a for _, a in d), dtype=np.float64, count=len(d))
+                        for stat in stats:
+                            col = f"{entity}_amt_{stat}_{label}"
+                            if stat == "mean":
+                                results[col][orig_pos] = float(arr.mean())
+                            elif stat == "max":
+                                results[col][orig_pos] = float(arr.max())
+                            elif stat == "std" and arr.size >= _MIN_SAMPLES_FOR_STD:
+                                results[col][orig_pos] = float(arr.std(ddof=_STD_DDOF))
+
+            # Pass 2: push tied rows' (ts, amt) into deques.
+            for k in range(i, j):
+                amt = sorted_amounts[k]
+                if pd.isna(amt):
+                    continue
+                amt_value = float(amt)
+                for entity, _ in self.entity_stats:
+                    entity_val = sorted_entities[entity][k]
+                    if pd.isna(entity_val):
+                        continue
+                    for _, secs in self.windows:
+                        state[(entity, secs)][entity_val].append((ts_value, amt_value))
+
+            i = j
+
+        out = df.copy()
+        for name, vals in results.items():
+            out[name] = vals
+        return out
+
+    def get_feature_names(self) -> list[str]:
+        """Return the deterministic list of generated column names.
+
+        Order: outer loop entity_stats (declaration order); middle
+        loop stats (declaration order); inner loop windows. All three
+        orderings are pinned at construction so the manifest is
+        stable across re-runs.
+        """
+        return [
+            f"{entity}_amt_{stat}_{label}"
+            for entity, stats in self.entity_stats
+            for stat in stats
+            for label, _ in self.windows
+        ]
+
+    def get_business_rationale(self) -> str:
+        """Return the manifest-rendered business rationale."""
+        return (
+            "Per-entity rolling mean / std / max of the amount column "
+            "over fixed lookback windows. Captures expected-spending "
+            "shape — a card whose 30-day mean is $40 suddenly seeing "
+            "$2000 is suspicious; the same card with a 30-day mean of "
+            "$1500 is not. Strict-past semantics avoid look-ahead leakage."
+        )
+
+
+__all__ = ["HistoricalStats", "VelocityCounter"]

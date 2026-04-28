@@ -3,6 +3,8 @@
 Public surface:
     BaseFeatureGenerator: ABC every Sprint 2+ feature generator inherits.
     FeaturePipeline: sequential composition with save / load + manifest.
+    HistoricalStats: Tier-2 per-entity rolling mean / std / max over
+        an amount column. Captures expected-spending shape.
     TemporalSafeGenerator: row-iterating ABC subclass that is leak-free
         by construction. Reference shape for tier 2-5 vectorized
         generators.
@@ -20,11 +22,12 @@ from fraud_engine.features.temporal_guards import (
     TemporalSafeGenerator,
     assert_no_future_leak,
 )
-from fraud_engine.features.tier2_aggregations import VelocityCounter
+from fraud_engine.features.tier2_aggregations import HistoricalStats, VelocityCounter
 
 __all__ = [
     "BaseFeatureGenerator",
     "FeaturePipeline",
+    "HistoricalStats",
     "TemporalSafeGenerator",
     "VelocityCounter",
     "assert_no_future_leak",
