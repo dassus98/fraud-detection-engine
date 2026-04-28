@@ -41,6 +41,7 @@ kaggle.json
 !/reports/
 /reports/*
 !/reports/sprint1_eda_summary.md
+!/reports/v_feature_reduction_report.md
 *.joblib
 *.pkl
 *.pt
