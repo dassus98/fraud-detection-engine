@@ -1,0 +1,37 @@
+# Tier-3 master configuration. Drives the V-feature reducer
+# (`NanGroupReducer`) defaults in
+# `src/fraud_engine/features/v_reduction.py`.
+#
+# Authoritative source for forward-looking Tier-3 settings. Keys
+# currently consumed:
+#   - nan_group_correlation_threshold (NanGroupReducer)
+#   - v_reduction_method                 (NanGroupReducer)
+#   - pca_variance_threshold             (NanGroupReducer)
+#
+# Reserved for a future migration:
+#   - coldstart_min_history (NOTE: `ColdStartHandler` currently reads
+#     `configs/coldstart.yaml` with default 3; this key with default 5
+#     is the forward-looking authoritative location and a future
+#     prompt may wire `ColdStartHandler` to read here. The two values
+#     do not conflict at runtime — only one is currently consumed.)
+
+# Within a NaN-group, drop a V column when its absolute Pearson
+# correlation with the kept (most-target-correlated) sibling exceeds
+# this threshold. Tighter ⇒ fewer drops; looser ⇒ more aggressive
+# dimensionality reduction.
+nan_group_correlation_threshold: 0.95
+
+# Reduction strategy for V columns inside each NaN-group.
+#   - "correlation" — keep the V column most correlated with `isFraud`,
+#     drop siblings highly correlated with the kept column.
+#   - "pca"         — replace the group with PCA components keeping
+#     `pca_variance_threshold` of the variance.
+v_reduction_method: correlation
+
+# PCA explained-variance retention target. Used when
+# `v_reduction_method == "pca"`. 0.95 keeps ~95% of within-group
+# variance per group.
+pca_variance_threshold: 0.95
+
+# Cold-start min-history (forward-looking; see header note).
+coldstart_min_history: 5

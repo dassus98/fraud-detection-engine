@@ -9,6 +9,9 @@ Public surface:
     FeaturePipeline: sequential composition with save / load + manifest.
     HistoricalStats: Tier-2 per-entity rolling mean / std / max over
         an amount column. Captures expected-spending shape.
+    NanGroupReducer: Tier-3 V-feature reducer that drops redundant
+        siblings within shared NaN-groups. The lone exception to the
+        BaseFeatureGenerator 'preserve all columns' contract.
     TargetEncoder: Tier-2 out-of-fold target encoder for
         high-cardinality categoricals. OOF on training; full-train
         encoder for val / test.
@@ -38,6 +41,7 @@ from fraud_engine.features.tier3_behavioral import (
     BehavioralDeviation,
     ColdStartHandler,
 )
+from fraud_engine.features.v_reduction import NanGroupReducer
 
 __all__ = [
     "BaseFeatureGenerator",
@@ -45,6 +49,7 @@ __all__ = [
     "ColdStartHandler",
     "FeaturePipeline",
     "HistoricalStats",
+    "NanGroupReducer",
     "TargetEncoder",
     "TemporalSafeGenerator",
     "VelocityCounter",
