@@ -1,0 +1,21 @@
+# HistoricalStats configuration. Drives `HistoricalStats` defaults
+# in `src/fraud_engine/features/tier2_aggregations.py`.
+
+# Amount column to aggregate over. Output column names use the
+# literal `amt` infix regardless of this value; renaming the column
+# is a separate, deliberate refactor.
+amount_col: TransactionAmt
+
+# Lookback windows. Map of human-readable label -> seconds.
+# Output columns land as `{entity}_amt_{stat}_{label}`.
+windows:
+  "30d": 2592000
+
+# Per-entity stat lists. Each entity gets one column per (stat, window) pair.
+# Currently supported stats: mean, std, max. Adding more (median, min,
+# count_distinct...) requires extending the dispatch in transform().
+entities:
+  card1:
+    stats: [mean, std, max]
+  addr1:
+    stats: [mean, std]
