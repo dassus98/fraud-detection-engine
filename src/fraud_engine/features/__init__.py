@@ -2,6 +2,10 @@
 
 Public surface:
     BaseFeatureGenerator: ABC every Sprint 2+ feature generator inherits.
+    BehavioralDeviation: Tier-3 per-card1 behavioural-deviation features
+        (amount z-score, time z-score, addr/device change, hour deviation).
+    ColdStartHandler: Tier-3 thin sibling that emits
+        `is_coldstart_{entity}` flags for entities with thin history.
     FeaturePipeline: sequential composition with save / load + manifest.
     HistoricalStats: Tier-2 per-entity rolling mean / std / max over
         an amount column. Captures expected-spending shape.
@@ -30,9 +34,15 @@ from fraud_engine.features.tier2_aggregations import (
     TargetEncoder,
     VelocityCounter,
 )
+from fraud_engine.features.tier3_behavioral import (
+    BehavioralDeviation,
+    ColdStartHandler,
+)
 
 __all__ = [
     "BaseFeatureGenerator",
+    "BehavioralDeviation",
+    "ColdStartHandler",
     "FeaturePipeline",
     "HistoricalStats",
     "TargetEncoder",

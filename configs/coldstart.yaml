@@ -1,0 +1,15 @@
+# ColdStartHandler configuration. Drives the `ColdStartHandler`
+# defaults in `src/fraud_engine/features/tier3_behavioral.py`.
+
+# Entity columns to emit cold-start flags for. Output column per
+# entity: `is_coldstart_{entity}` (int, 0 or 1).
+entity_cols:
+  - card1
+
+# Minimum number of strictly-prior events for an entity to be "warm".
+# A row is cold-start if the entity's prior count is `< min_history`.
+# Default 3 — the smallest window where mean / std / mode start to
+# stabilise (per EDA Section B).
+min_history: 3
+
+timestamp_col: TransactionDT

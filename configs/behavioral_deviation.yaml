@@ -1,0 +1,21 @@
+# BehavioralDeviation configuration. Drives the `BehavioralDeviation`
+# defaults in `src/fraud_engine/features/tier3_behavioral.py`.
+
+# Entity column the deviation features are keyed on. Default `card1`
+# is the project-canonical card identifier (always populated per
+# IEEE-CIS).
+entity_col: card1
+
+# Source columns the deviations are computed against. Match the
+# cleaner / Tier-1 output names; rename only with a coordinated
+# downstream update.
+amount_col: TransactionAmt
+addr_col: addr1
+device_col: DeviceInfo
+hour_col: hour_of_day  # produced by `TimeFeatureGenerator` (Tier 1)
+timestamp_col: TransactionDT
+
+# Smoothing in the z-score denominators: `(value − mean) / (std + ε)`.
+# Prevents division-by-zero when a card has constant amounts in its
+# prior history.
+epsilon: 1.0e-9
