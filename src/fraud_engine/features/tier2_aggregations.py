@@ -62,7 +62,9 @@ from typing import Any, Final, Self
 import numpy as np
 import pandas as pd
 import yaml
+from sklearn.model_selection import StratifiedKFold
 
+from fraud_engine.config.settings import get_settings
 from fraud_engine.features.base import BaseFeatureGenerator
 
 # Default temporal column. Mirrors `data/splits.py:_TIME_COLUMN` and
@@ -95,6 +97,26 @@ _SUPPORTED_STATS: Final[frozenset[str]] = frozenset({"mean", "std", "max"})
 # threshold `pd.Series.std(ddof=1)` returns NaN, so `HistoricalStats`
 # leaves the default NaN in place to match.
 _MIN_SAMPLES_FOR_STD: Final[int] = 2
+
+# ---------------------------------------------------------------------
+# `TargetEncoder` defaults.
+# ---------------------------------------------------------------------
+
+# Default smoothing strength. With α=10, a category with exactly 10
+# observations sits halfway between its own observed rate and the
+# global rate. Larger α shrinks toward the global rate; α → ∞
+# produces a constant equal to the global rate (tested).
+_DEFAULT_SMOOTHING_ALPHA: Final[float] = 10.0
+
+# Default number of OOF folds. 5 is the standard choice in the
+# fraud-ML literature; the implementation works for any K ≥ 2.
+_DEFAULT_N_SPLITS: Final[int] = 5
+
+# Default target column. Mirrors `data/splits.py:_LABEL_COLUMN`.
+_DEFAULT_TARGET_COLUMN: Final[str] = "isFraud"
+
+# Config filename for `TargetEncoder`.
+_TARGET_ENCODER_CONFIG_FILENAME: Final[str] = "target_encoder.yaml"
 
 
 def _resolve_config_path(filename: str) -> Path:
@@ -594,4 +616,303 @@ class HistoricalStats(BaseFeatureGenerator):
         )
 
 
-__all__ = ["HistoricalStats", "VelocityCounter"]
+class TargetEncoder(BaseFeatureGenerator):
+    """Out-of-fold (OOF) target encoder for high-cardinality categoricals.
+
+    For each categorical column, replaces the raw value with a
+    smoothed estimate of the target rate conditional on that value.
+    The encoded value at training row R uses ONLY data from folds
+    that do NOT contain R; at val/test time, a full-train encoder
+    fit on all of training is applied. This OOF discipline is the
+    only correct defence against catastrophic self-leakage; the
+    `tests/integration/test_tier2_no_target_leak.py` shuffled-labels
+    gate fails if the discipline is violated.
+
+    Smoothing formula:
+        encoded = (sum_target + α × global_rate) / (count + α)
+
+    With α = 0 this reduces to the raw rate. With α large, the
+    encoded value shrinks toward the global rate, protecting
+    categories with few observations from over-confident estimates.
+    With α → ∞ every category encodes to the global rate (tested).
+
+    Business rationale:
+        High-cardinality categoricals (`card4`, `addr1`,
+        `P_emaildomain`) carry strong fraud signal but are
+        impractical to one-hot encode. Target encoding compresses
+        each category into a single fraud-risk number that LightGBM
+        splits on directly. Sprint 5's serving layer reuses the
+        saved encoder over a Redis lookup keyed by category — same
+        column-name contract.
+
+    Trade-offs considered:
+        - **OOF (StratifiedKFold) on `fit_transform`; full-train
+          encoder on `fit` + `transform`.** The override pattern
+          keeps the contract compatible with `BaseFeatureGenerator`
+          while giving the OOF discipline its required two-mode
+          behaviour. `FeaturePipeline.fit_transform` (after the
+          2.2.d 1-line fix) calls each generator's `fit_transform`,
+          so the override engages naturally inside a pipeline.
+        - **Random-stratified KFold within training, NOT
+          `TimeSeriesSplit`.** The temporal-discipline boundary in
+          this project is at train/val/test (handled by
+          `temporal_split`). Within training, OOF is purely a
+          self-leakage prevention mechanism; random folds give the
+          most stable per-category aggregates. `TimeSeriesSplit`
+          would force fold 0 to encode against zero rows of
+          training history, which is broken. Stratified-on-target
+          ensures each fold has comparable fraud rates.
+        - **Fold-specific global_rate as the smoothing prior.** When
+          encoding fold k from the OTHER folds' data, the global
+          rate used in smoothing is computed from those OTHER folds
+          too — never from fold k or full training. Otherwise we'd
+          inject a tiny bit of fold-k information into its own
+          smoothing prior.
+        - **NaN as its own category** (`groupby(col, dropna=False)`).
+          For columns like `addr1` and `P_emaildomain` (high null
+          rate per the EDA), the fraud rate among null-categorical
+          rows is itself a real signal. The cleaner's
+          `MissingIndicatorGenerator` captures the binary "is null";
+          `TargetEncoder` captures the conditional rate.
+        - **Unseen categories at val/test → global rate.** Falls
+          out naturally: a category with `total = 0` produces
+          `(0 + α × global_rate) / (0 + α) = global_rate`. No
+          special-case branch needed.
+        - **`fit` does NOT do OOF.** It fits only the full-train
+          encoder. A caller doing `enc.fit(train).transform(train)`
+          gets the leaked path — same misuse footgun every target
+          encoder library has. Documented as: "use `fit_transform`
+          on training; `fit` is for the val/test-only path."
+
+    Attributes:
+        cat_cols: tuple of categorical column names.
+        target_col: target column name.
+        alpha: smoothing strength.
+        n_splits: number of OOF folds.
+        random_state: seed for the StratifiedKFold split.
+        mappings_: per-column dict of `{category: encoded_value}`
+            for the full-train encoder. None pre-fit.
+        global_rates_: per-column full-train target mean. None
+            pre-fit. Used as fallback for unseen categories at
+            transform time.
+    """
+
+    def __init__(  # noqa: PLR0913 — six explicit kwargs keep the YAML-override surface readable; condensing into a config dict would be worse.
+        self,
+        cat_cols: Sequence[str] | None = None,
+        target_col: str | None = None,
+        alpha: float | None = None,
+        n_splits: int | None = None,
+        random_state: int | None = None,
+        config_path: Path | None = None,
+    ) -> None:
+        """Construct the target encoder.
+
+        Args:
+            cat_cols: Categorical column names. If `None`, read from
+                the YAML's `cat_cols` list.
+            target_col: Target column name. If `None`, YAML default
+                (`isFraud`).
+            alpha: Smoothing strength. If `None`, YAML default (10.0).
+            n_splits: Number of OOF folds. If `None`, YAML default (5).
+            random_state: Seed for the StratifiedKFold split. If
+                `None`, falls back to `get_settings().seed`.
+            config_path: Override the default YAML path. Production
+                code uses the default; tests may override.
+        """
+        if cat_cols is None or target_col is None or alpha is None or n_splits is None:
+            cfg = _load_yaml(config_path or _resolve_config_path(_TARGET_ENCODER_CONFIG_FILENAME))
+            yaml_cat_cols: Sequence[str] = cfg.get("cat_cols", [])
+            yaml_target_col: str = cfg.get("target_col", _DEFAULT_TARGET_COLUMN)
+            yaml_alpha: float = float(cfg.get("alpha", _DEFAULT_SMOOTHING_ALPHA))
+            yaml_n_splits: int = int(cfg.get("n_splits", _DEFAULT_N_SPLITS))
+        else:
+            yaml_cat_cols = []
+            yaml_target_col = _DEFAULT_TARGET_COLUMN
+            yaml_alpha = _DEFAULT_SMOOTHING_ALPHA
+            yaml_n_splits = _DEFAULT_N_SPLITS
+
+        self.cat_cols: tuple[str, ...] = tuple(cat_cols if cat_cols is not None else yaml_cat_cols)
+        self.target_col: str = target_col if target_col is not None else yaml_target_col
+        self.alpha: float = alpha if alpha is not None else yaml_alpha
+        self.n_splits: int = n_splits if n_splits is not None else yaml_n_splits
+        self.random_state: int = random_state if random_state is not None else get_settings().seed
+
+        # Fitted state — populated by `fit` or `fit_transform`.
+        self.mappings_: dict[str, dict[Any, float]] | None = None
+        self.global_rates_: dict[str, float] | None = None
+
+    # -----------------------------------------------------------------
+    # Core helpers.
+    # -----------------------------------------------------------------
+
+    def _validate_columns(self, df: pd.DataFrame) -> None:
+        """Raise if any required column is missing from `df`."""
+        missing = sorted({self.target_col, *self.cat_cols} - set(df.columns))
+        if missing:
+            raise KeyError(f"TargetEncoder: missing required column(s) {missing}")
+
+    def _compute_mapping(self, df: pd.DataFrame, col: str, global_rate: float) -> dict[Any, float]:
+        """Compute the smoothed `{category: encoded_value}` mapping.
+
+        `groupby(col, dropna=False)` includes the NaN group as its
+        own key (numpy NaN). Downstream `_lookup` handles NaN-key
+        retrieval explicitly because `dict.get(np.nan)` does not
+        match (NaN != NaN).
+        """
+        grouped = df.groupby(col, dropna=False)[self.target_col]
+        counts = grouped.count()
+        sums = grouped.sum()
+        smoothed = (sums + self.alpha * global_rate) / (counts + self.alpha)
+        return {key: float(val) for key, val in smoothed.items()}
+
+    @staticmethod
+    def _lookup(mapping: dict[Any, float], cat_val: Any, fallback: float) -> float:
+        """Return `mapping[cat_val]` with NaN-aware lookup; fall back if missing."""
+        if pd.isna(cat_val):
+            for key, value in mapping.items():
+                if pd.isna(key):
+                    return value
+            return fallback
+        return float(mapping.get(cat_val, fallback))
+
+    # -----------------------------------------------------------------
+    # `BaseFeatureGenerator` contract.
+    # -----------------------------------------------------------------
+
+    def fit(self, df: pd.DataFrame) -> Self:
+        """Fit the FULL-train encoder. Use for val/test-only path.
+
+        Note: `enc.fit(train).transform(train)` produces leaked
+        encodings (same risk every target-encoder library has). For
+        training rows, use `fit_transform` to get OOF encoding;
+        `fit` + `transform` is for the val/test path.
+        """
+        self._validate_columns(df)
+        global_rate = float(df[self.target_col].mean())
+        mappings: dict[str, dict[Any, float]] = {}
+        global_rates: dict[str, float] = {}
+        for col in self.cat_cols:
+            mappings[col] = self._compute_mapping(df, col, global_rate)
+            global_rates[col] = global_rate
+        self.mappings_ = mappings
+        self.global_rates_ = global_rates
+        return self
+
+    def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        """OOF-encode training rows; ALSO fit the full-train encoder.
+
+        For each StratifiedKFold split (other_idx, oof_idx):
+            1. Compute the fold-specific `global_rate` from `other_idx`.
+            2. Compute the smoothed mapping from `other_idx` only.
+            3. Apply the mapping to `oof_idx` rows and write into
+               the output column at the rows' original positions.
+
+        After OOF, fits the full-train encoder via `self.fit(df)` so
+        a downstream `pipeline.transform(val)` call has the encoder
+        ready (this is what `FeaturePipeline.fit_transform(train);
+        pipeline.transform(val)` relies on).
+
+        Args:
+            df: Training frame; must contain `target_col` and every
+                column in `cat_cols`.
+
+        Returns:
+            `df.copy()` with one new column per `cat_cols` entry,
+            named `{col}_target_enc`. Each training row's encoded
+            value derives from a slice of training that does NOT
+            include the row itself.
+
+        Raises:
+            KeyError: If any required column is missing.
+        """
+        self._validate_columns(df)
+        n = len(df)
+        feature_names = self.get_feature_names()
+
+        # Pre-allocate with NaN. Any NaN in the output post-OOF is a
+        # bug — every training row should be assigned an encoded
+        # value by exactly one fold.
+        encoded: dict[str, list[float]] = {name: [float("nan")] * n for name in feature_names}
+
+        targets = df[self.target_col].to_numpy()
+        skf = StratifiedKFold(
+            n_splits=self.n_splits,
+            shuffle=True,
+            random_state=self.random_state,
+        )
+
+        for other_idx, oof_idx in skf.split(np.zeros(n), targets):
+            other_df = df.iloc[other_idx]
+            oof_df = df.iloc[oof_idx]
+            fold_global_rate = float(other_df[self.target_col].mean())
+
+            for col in self.cat_cols:
+                mapping = self._compute_mapping(other_df, col, fold_global_rate)
+                out_col = f"{col}_target_enc"
+                cat_values = oof_df[col].to_numpy()
+                for original_pos, cat_val in zip(oof_idx, cat_values, strict=True):
+                    encoded[out_col][int(original_pos)] = self._lookup(
+                        mapping, cat_val, fold_global_rate
+                    )
+
+        # Fit the full-train encoder for later `transform` calls.
+        self.fit(df)
+
+        out = df.copy()
+        for name, vals in encoded.items():
+            out[name] = vals
+        return out
+
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Apply the full-train encoder. Used for val / test / serving.
+
+        Does NOT require `target_col` in `df` — this path is used
+        for held-out predictions where the target is not available.
+
+        Args:
+            df: Frame to transform; must contain every column in
+                `cat_cols`.
+
+        Returns:
+            `df.copy()` with one new column per `cat_cols` entry.
+
+        Raises:
+            AttributeError: If the encoder has not been fit.
+            KeyError: If any required cat column is missing from `df`.
+        """
+        if self.mappings_ is None or self.global_rates_ is None:
+            raise AttributeError("TargetEncoder must be fit before transform")
+        missing = sorted(set(self.cat_cols) - set(df.columns))
+        if missing:
+            raise KeyError(f"TargetEncoder.transform: missing column(s) {missing}")
+
+        out = df.copy()
+        for col in self.cat_cols:
+            mapping = self.mappings_[col]
+            global_rate = self.global_rates_[col]
+            cat_values = df[col].to_numpy()
+            out[f"{col}_target_enc"] = [
+                self._lookup(mapping, cat_val, global_rate) for cat_val in cat_values
+            ]
+        return out
+
+    def get_feature_names(self) -> list[str]:
+        """Return the deterministic list of generated column names."""
+        return [f"{col}_target_enc" for col in self.cat_cols]
+
+    def get_business_rationale(self) -> str:
+        """Return the manifest-rendered business rationale."""
+        return (
+            "Out-of-fold (OOF) target encoding for high-cardinality "
+            "categoricals (card4, addr1, P_emaildomain). Each "
+            "training row's encoded value derives from a fold that "
+            "does NOT contain the row itself — the only correct "
+            "defence against self-leakage. Val / test use a full-train "
+            "encoder. Smoothing toward the global rate via "
+            "(sum + α × global_rate) / (count + α) protects "
+            "low-cardinality categories from over-confident estimates."
+        )
+
+
+__all__ = ["HistoricalStats", "TargetEncoder", "VelocityCounter"]

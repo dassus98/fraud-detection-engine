@@ -5,6 +5,9 @@ Public surface:
     FeaturePipeline: sequential composition with save / load + manifest.
     HistoricalStats: Tier-2 per-entity rolling mean / std / max over
         an amount column. Captures expected-spending shape.
+    TargetEncoder: Tier-2 out-of-fold target encoder for
+        high-cardinality categoricals. OOF on training; full-train
+        encoder for val / test.
     TemporalSafeGenerator: row-iterating ABC subclass that is leak-free
         by construction. Reference shape for tier 2-5 vectorized
         generators.
@@ -22,12 +25,17 @@ from fraud_engine.features.temporal_guards import (
     TemporalSafeGenerator,
     assert_no_future_leak,
 )
-from fraud_engine.features.tier2_aggregations import HistoricalStats, VelocityCounter
+from fraud_engine.features.tier2_aggregations import (
+    HistoricalStats,
+    TargetEncoder,
+    VelocityCounter,
+)
 
 __all__ = [
     "BaseFeatureGenerator",
     "FeaturePipeline",
     "HistoricalStats",
+    "TargetEncoder",
     "TemporalSafeGenerator",
     "VelocityCounter",
     "assert_no_future_leak",
