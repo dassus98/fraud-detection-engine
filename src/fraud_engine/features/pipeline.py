@@ -135,7 +135,16 @@ class FeaturePipeline:
         """
         current = df
         for gen in self.generators:
-            current = gen.fit(current).transform(current)
+            # Call `fit_transform` (not `fit().transform()` separately) so
+            # generators that override `fit_transform` for non-trivial
+            # reasons engage their override. `BaseFeatureGenerator`'s
+            # default `fit_transform` is `self.fit(df).transform(df)`,
+            # so this is identity-preserving for stateless / standard
+            # generators. `TargetEncoder` (Sprint 2 prompt 2.2.d)
+            # overrides `fit_transform` to do out-of-fold encoding;
+            # without this call shape, the OOF discipline would be
+            # silently bypassed inside a pipeline.
+            current = gen.fit_transform(current)
         self.last_output_dtypes = {col: str(current[col].dtype) for col in current.columns}
         return current
 

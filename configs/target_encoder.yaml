@@ -1,0 +1,22 @@
+# TargetEncoder configuration. Drives `TargetEncoder` defaults
+# in `src/fraud_engine/features/tier2_aggregations.py`.
+
+# Categorical columns to encode. Each must exist in the cleaner-output
+# schema. Output columns land as `{col}_target_enc`.
+cat_cols:
+  - card4
+  - addr1
+  - P_emaildomain
+
+# Target column. Standard fraud target.
+target_col: isFraud
+
+# Additive smoothing strength. 10 is the canonical default; a category
+# with 10 observations sits halfway between its own observed rate and
+# the global rate. α → ∞ produces a constant equal to the global rate
+# (tested by `test_alpha_infinity_yields_global_rate`).
+alpha: 10.0
+
+# Number of OOF folds. 5 is conventional; smaller (3) is faster but
+# noisier per-row, larger (10) is more stable but slower.
+n_splits: 5
