@@ -197,3 +197,34 @@ Verification passed. Ready for John to commit on `sprint-2/prompt-2-2-c-historic
 ```
 2.2.c: HistoricalStats (Tier-2 rolling mean/std/max over entity windows)
 ```
+
+---
+
+## Audit (2026-04-28)
+
+Re-audit on branch `sprint-2/audit-and-gap-fill` (off `main` at `106f321`, post-Sprint-2 original audit). Goal: re-verify the 2.2.c deliverables against the spec and gap-fill anything missing.
+
+### Findings
+
+- **Spec coverage: complete.**
+  - `HistoricalStats` per-entity rolling stats; default 30 d window (configurable via YAML / kwargs) ✓
+  - All 5 spec-required output columns: `card1_amt_mean_30d`, `card1_amt_std_30d`, `card1_amt_max_30d`, `addr1_amt_mean_30d`, `addr1_amt_std_30d` (configured via `configs/historical_stats.yaml`) ✓
+  - Same sorted-iteration pattern as `VelocityCounter`, with deque payload upgraded from `int` (timestamp) to `(int, float)` ((timestamp, amount)) and stats dispatched over a numpy view ✓ (`tier2_aggregations.py:481-591`)
+  - Rolling window ends strictly before current row's timestamp ✓ — implemented via tied-group two-pass batching identical to `VelocityCounter`'s pattern (Decision 5).
+  - Tests: 7 unit (hand-computed stats, NaN entity, empty window, n=1 std, strict-past, ties, unsupported-stat rejection) + 1 hypothesis property (naive ↔ optimised) + 1 `assert_no_future_leak` + 2 config-load = 11 total ✓
+- **No `TODO` / `FIXME` / `XXX` / `HACK` markers** in the HistoricalStats region or `test_tier2_historical.py`.
+- **No skipped or `xfail`-marked tests.**
+- **Sample-std (`ddof=1`) is correctly pinned via `_STD_DDOF: Final[int] = 1`** module constant. Matches `pd.Series.std()` (the property test's reference) bit-for-bit.
+- **Documented "no perf benchmark" deviation is acceptable.** The spec marked this prompt "High" risk (vs `VelocityCounter`'s "Very High" risk that mandated a perf benchmark). The hypothesis property test exercises the algorithm exhaustively on small frames; the full-data 590k-row run lives in 2.2.e's build script (val AUC = 0.9143, runtime well within limits).
+- **YAML-resolver refactor (`_resolve_default_config_path` → `_resolve_config_path(filename)`) is in place** and is now also used by `TargetEncoder` (added in 2.2.d). Confirms the refactor was correctly scoped.
+
+### Verification (audit run)
+
+```
+$ uv run pytest tests/unit/test_tier2_historical.py -v
+11 passed, 14 warnings in 3.12s
+```
+
+### Conclusion
+
+No code changes required. The 2.2.c deliverables (`HistoricalStats` + `historical_stats.yaml` + 11 tests) are spec-complete and audit-clean. The deque payload upgrade and recompute-from-deque stat dispatch are clean extensions of the 2.2.b pattern.

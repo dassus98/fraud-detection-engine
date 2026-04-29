@@ -237,3 +237,38 @@ Verification passed. Ready for John to commit on `sprint-2/prompt-2-2-e-tier12-b
 ```
 2.2.e: tier1+2 build pipeline + TierTwoFeaturesSchema + integration/lineage tests
 ```
+
+---
+
+## Audit (2026-04-28)
+
+Re-audit on branch `sprint-2/audit-and-gap-fill` (off `main` at `106f321`, post-Sprint-2 original audit). Goal: re-verify the 2.2.e deliverables against the spec and gap-fill anything missing.
+
+### Findings
+
+- **Spec coverage: complete.**
+  - Build script chains all 7 generators (4 Tier-1 + 3 Tier-2) ✓ — `scripts/build_features_tier1_2.py` lines 116-126.
+  - `TierTwoFeaturesSchema` extends `TierOneFeaturesSchema.add_columns({...})` with 20 deterministic Tier-2 columns (12 velocity + 5 historical + 3 target-enc) ✓.
+  - Lineage test: `assert_no_future_leak` over **20 features × 50 samples = 1000 leak checks** on val output ✓ — failures accumulated for clear reporting.
+  - E2E integration test on 10k stratified sample with row-count + schema-validation checks ✓; full-dataset val AUC reported via the build script (0.9143 within spec target ~0.91).
+- **No `TODO` / `FIXME` / `XXX` / `HACK` markers** in any 2.2.e artefact (`build_features_tier1_2.py`, `test_tier2_e2e.py`, `test_tier2_temporal_integrity.py`).
+- **No skipped or `xfail`-marked tests.** Standard `MANIFEST.json` skip-gate on real-data tests.
+- **Build artefacts on disk match the report.** `tier2_train.parquet` (98 MB), `tier2_val.parquet` (21 MB), `tier2_test.parquet` (24 MB), `tier2_pipeline.joblib` (27 KB) all present at their declared paths (timestamps 2026-04-28 11:41, the original 2.2.e build run).
+- **Documented decisions hold:**
+  - Decision 1: lineage walk includes all 20 Tier-2 columns (incl. target-enc as regression detector) — confirmed.
+  - Decision 2: lineage walk runs on val output, not train (OOF target-enc on train would deliberately fail the strict-past assertion) — confirmed.
+  - Decision 3: `FEATURE_SCHEMA_VERSION` stays at 1 because Tier-2 is an additive extension; `_FEATURE_MANIFEST_SCHEMA_VERSION` (in `pipeline.py`) is the file-shape version and also unchanged — confirmed.
+- **Documented PerformanceWarning from `MissingIndicatorGenerator`** is unchanged (cosmetic; out of scope for this audit). Original Sprint-2 audit listed it as a deferred Sprint-3 item.
+
+### Verification (audit run)
+
+```
+$ uv run pytest tests/integration/test_tier2_e2e.py tests/lineage/test_tier2_temporal_integrity.py -v
+3 passed, 946 warnings in 88.73s (0:01:28)
+```
+
+(2 integration + 1 lineage = 3 total; run via §17 daemon. Wall-clock 88.73 s essentially identical to the original 88.37 s — fixture load + 1000 leak checks scale linearly with the same data.)
+
+### Conclusion
+
+No code changes required. The 2.2.e deliverables (`TierTwoFeaturesSchema` + `build_features_tier1_2.py` + 2 integration tests + 1 lineage test running 1000 leak checks) are spec-complete and audit-clean. The full-data val AUC = 0.9143 is within the spec target ~0.91 and the leak walk confirms zero temporal leakage across all 20 Tier-2 columns.

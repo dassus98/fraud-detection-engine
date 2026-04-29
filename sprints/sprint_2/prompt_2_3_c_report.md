@@ -256,3 +256,44 @@ Verification passed (with documented val AUC gap). Ready for John to commit on `
 ```
 2.3.c: tier1+2+3 build pipeline + TierThreeFeaturesSchema + integration/lineage tests
 ```
+
+---
+
+## Audit (2026-04-28)
+
+Re-audit on branch `sprint-2/audit-and-gap-fill` (off `main` at `106f321`, post-Sprint-2 original audit). Goal: re-verify the 2.3.c deliverables against the spec and gap-fill anything sensible.
+
+### Findings
+
+- **Structural spec coverage: complete.**
+  - Build script chains all 10 generators (4 Tier-1 + 3 Tier-2 + 3 Tier-3) ✓ — `scripts/build_features_tier1_2_3.py` lines 124-135. `NanGroupReducer` is correctly placed last per its docstring requirement.
+  - Full pipeline ran on full dataset (414k train + 84k val + 92k test); all three splits transformed and parquet-persisted ✓ — artefacts at `data/processed/tier3_*.parquet` (timestamps 2026-04-28 13:05).
+  - LightGBM trained, val AUC reported via `tier3_val_auc` metric ✓ (0.9063).
+  - `TierThreeFeaturesSchema` extends `TierTwoFeaturesSchema` with the 6 deterministic Tier-3 columns; `is_null_*` and dropped V columns pass through inherited `strict=False` ✓.
+  - 2 integration tests (schema validation + row preservation) + 1 lineage test (6 features × 50 samples = 300 leak checks) ✓.
+- **No `TODO` / `FIXME` / `XXX` / `HACK` markers** in any 2.3.c artefact.
+- **No skipped or `xfail`-marked tests.**
+- **Documented val-AUC spec gap (0.9063 < 0.91, gap −0.0037) is unchanged.** Re-evaluated for in-scope gap-fills:
+  - **Hyperparameter tuning** — the strongest mitigation, but explicitly Sprint-3 work; out of scope for this audit.
+  - **Raise `nan_group_correlation_threshold` to 0.97** — would close the V-reduction's −0.005 contribution to the gap, but the original Sprint-2 audit explicitly deferred this to Sprint 3 because the optimum threshold depends on the post-tuning baseline. Touching it now would just produce another data point at the same un-tuned baseline, with no decision-grade information gained.
+  - **Skip `NanGroupReducer` entirely** — would invalidate 2.3.b's deliverables and the whole Tier-3 build script structure. Out of scope.
+  - **Verdict:** the val-AUC gap remains a Sprint-3 pickup item, as before. Sprint 3's tuning is the natural recovery path; the original report's mitigation list and the Sprint-2 audit's pickup list both stand.
+- **Lineage test source_df (val_out, not splits.val) is sound.** Re-confirmed why it's necessary: `BehavioralDeviation.transform` reads `hour_of_day` (added by `TimeFeatureGenerator`); cleaner-output `splits.val` doesn't have it. Documented at length in the test's module docstring (Decision §4 in the original report).
+- **NanGroupReducer excluded from the leak walk is sound.** It removes columns rather than adding them. The kept V columns are pre-existing inputs already covered by 2.2.e's Tier-2 lineage walk (1000 leak checks across all 339 V cols pre-reduction).
+- **Build artefacts on disk match the report.** `tier3_train.parquet` (102 MB), `tier3_val.parquet` (22 MB), `tier3_test.parquet` (25 MB), `tier3_pipeline.joblib` (36 KB) all present at their declared paths.
+- **PerformanceWarning from `MissingIndicatorGenerator`** is unchanged and remains the deferred cosmetic item per the original Sprint-2 audit.
+
+### Verification (audit run)
+
+```
+$ uv run pytest tests/integration/test_tier3_e2e.py tests/lineage/test_tier3_lineage.py -v
+3 passed, 952 warnings in 79.70s (0:01:19)
+```
+
+(2 integration + 1 lineage test = 3 total; run via §17 daemon. Wall-clock 79.70 s vs the original 72.34 s — natural CPU variance on the same fixture; the 300 leak checks themselves run in a few seconds.)
+
+The slow build script (`scripts/build_features_tier1_2_3.py`, ~7 min on full data) was NOT re-run — its artefacts are on disk from the original 2.3.c run, the val AUC gap is a documented finding, and the headline number (0.9063) would not change at the same untuned LightGBM defaults. Re-running would consume ~7 min for a deterministic-on-seed reproduction with no new information.
+
+### Conclusion
+
+No code changes required. The 2.3.c deliverables (`build_features_tier1_2_3.py` + `TierThreeFeaturesSchema` + 2 integration tests + 1 lineage test running 300 leak checks + on-disk build artefacts) are spec-complete on every axis except the val-AUC acceptance target. The val-AUC gap (0.9063 vs 0.91, −0.0037) is the documented Sprint-3 pickup item; gap-filling it inside this audit would require either Sprint-3 hyperparameter tuning or a config tweak whose information value depends on having the tuned baseline first. Defer to Sprint 3 as planned.

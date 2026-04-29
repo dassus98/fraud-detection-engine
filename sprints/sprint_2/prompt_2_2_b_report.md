@@ -200,3 +200,34 @@ Verification passed. Ready for John to commit on `sprint-2/prompt-2-2-b-velocity
 ```
 2.2.b: VelocityCounter (Tier-2 deque-based velocity over entity windows)
 ```
+
+---
+
+## Audit (2026-04-28)
+
+Re-audit on branch `sprint-2/audit-and-gap-fill` (off `main` at `106f321`, post-Sprint-2 original audit). Goal: re-verify the 2.2.b deliverables against the spec and gap-fill anything missing.
+
+### Findings
+
+- **Spec coverage: complete.**
+  - Default entities = `card1`, `addr1`, `DeviceInfo`, `P_emaildomain` ✓ (`configs/velocity.yaml`)
+  - Default windows = `1h` (3600 s), `24h` (86400 s), `7d` (604800 s) ✓
+  - Algorithm: sorted iteration + per-(entity, window) deque + lazy popleft eviction ✓ (`tier2_aggregations.py:238-333`); explicitly NOT `groupby + rolling`.
+  - Full docstring with business rationale + trade-offs (deque vs groupby; fixed vs decay-windows defer to Tier 4; tied-timestamp two-pass; NaN entity → 0; stateless `fit`) ✓ (lines 1-53, 161-191).
+  - Tests: hand-computed counts ✓, hypothesis property (naive ↔ optimized) ✓, `assert_no_future_leak` passes ✓, performance 100k rows < 30 s ✓ (1.05 s reported).
+- **No `TODO` / `FIXME` / `XXX` / `HACK` markers** in the VelocityCounter region of `tier2_aggregations.py` (lines 160-355) or `test_tier2_velocity.py`.
+- **No skipped or `xfail`-marked tests.** `@pytest.mark.slow` on the perf test is intentional and runs under `make test-fast`.
+- **Module-file growth is normal evolution.** `tier2_aggregations.py` was 310 LOC at 2.2.b time; now 918 LOC because 2.2.c added `HistoricalStats` (lines 358-616) and 2.2.d added `TargetEncoder` (lines 619-916) to the same file. The 2.2.b region — `VelocityCounter` itself plus the shared `_resolve_config_path` / `_load_yaml` helpers — is structurally unchanged. Each later prompt has its own audit section.
+
+### Verification (audit run)
+
+```
+$ uv run pytest tests/unit/test_tier2_velocity.py -v
+10 passed, 14 warnings in 5.62s
+```
+
+(The wall-clock variance from the original 4.34 s reflects natural CPU variance; the 1.05 s perf benchmark inside `test_100k_rows_under_30s` is unchanged on the same machine.)
+
+### Conclusion
+
+No code changes required. The 2.2.b deliverables (`VelocityCounter` + `velocity.yaml` + 10 tests) are spec-complete and audit-clean. The deque-per-entity O(n)-amortised algorithm is the production-quality implementation Sprint 5's serving layer will reuse.

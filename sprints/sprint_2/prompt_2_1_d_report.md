@@ -223,3 +223,36 @@ Run wall-clock: 58.3 s (load 0.9s + fit_transform train 8.9s + transform val 1.2
 - [x] No source files outside the listed set are modified
 
 Verification passed. Ready for John to commit on `sprint-2/prompt-2-1-d-tier1-build-and-schema`.
+
+---
+
+## Audit (2026-04-28)
+
+Re-audit on branch `sprint-2/audit-and-gap-fill` (off `main` at `106f321`, post-Sprint-2 original audit). Goal: re-verify the 2.1.d deliverables against the spec and gap-fill anything missing.
+
+### Findings
+
+- **Spec coverage: complete.** Every spec item maps to a green deliverable:
+  - `TierOneFeaturesSchema` extends `InterimTransactionSchema` via `add_columns({...})` with all 14 deterministic Tier-1 columns ✓
+  - `scripts/build_features_tier1.py` opens a `Run`, loads train/val/test interim parquet, fits pipeline on train only, transforms all three, writes `data/processed/tier1_{split}.parquet`, saves `models/pipelines/tier1_pipeline.joblib` + `feature_manifest.json` ✓
+  - 2 integration tests on a 10k stratified sample (schema validation + row-count preservation) ✓
+  - 3 lineage tests (train→val applies cleanly, no NaN in non-nullable cols, manifest schema_version matches) ✓
+  - Completion report includes feature manifest excerpt, runtime (58.3 s), and Tier-1 val AUC (0.9165 vs Sprint 1 baseline 0.9247) ✓
+- **No `TODO` / `FIXME` / `XXX` / `HACK` markers** in any 2.1.d artefact (`schemas/features.py`, `build_features_tier1.py`, `test_tier1_e2e.py`, `test_tier1_lineage.py`).
+- **No skipped or `xfail`-marked tests.** Both lineage and integration tests are skip-gated only on `data/raw/MANIFEST.json` (the standard pattern for "needs real merged data").
+- **Schema growth is normal evolution.** `schemas/features.py` was 154 LOC at 2.1.d time; now 292 LOC because 2.2.e added `TierTwoFeaturesSchema` and 2.3.c added `TierThreeFeaturesSchema` to the same file via `.add_columns({...})` composition. The 2.1.d region (`TierOneFeaturesSchema` declaration, lines 129–190) is unchanged. Each tier's report covers its own additions.
+- **Build artefacts on disk match the report.** `tier1_train.parquet` (78 MB, 2026-04-27 14:38), `tier1_val.parquet` (17 MB), `tier1_test.parquet` (20 MB), `tier1_pipeline.joblib` (19 KB) all present in their declared locations. `feature_manifest.json` was last overwritten by 2.3.c's build (the file is shared across tier builds — each new tier build replaces it; this is intentional and documented).
+- **Documented val-AUC gap (0.9165 vs 0.9247) is unchanged and out-of-scope for this audit.** Sprint 3's hyperparameter tuning is the natural recovery path; the original report's "Surprising Findings §1" still stands.
+
+### Verification (audit run)
+
+```
+$ uv run pytest tests/integration/test_tier1_e2e.py tests/lineage/test_tier1_lineage.py -v
+5 passed, 1179 warnings in 79.51s (0:01:19)
+```
+
+(Run via §17 daemon. The 79.51 s wall-clock is up from 62.94 s in the original report — same number of tests, same data; the delta reflects natural variance in the module-scoped fixture's load + clean steps. Both runs are well under the 5-minute lineage-suite ceiling.)
+
+### Conclusion
+
+No code changes required. The 2.1.d deliverables (`TierOneFeaturesSchema`, `build_features_tier1.py`, integration + lineage tests, on-disk build artefacts) are spec-complete and audit-clean.

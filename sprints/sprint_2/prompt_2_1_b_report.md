@@ -154,3 +154,33 @@ Success: no issues found in 26 source files
 - [x] No source files outside the three declared above are modified
 
 Verification passed. Ready for John to commit on `sprint-2/prompt-2-1-b-tier1-amount-and-time`.
+
+---
+
+## Audit (2026-04-28)
+
+Re-audit on branch `sprint-2/audit-and-gap-fill` (off `main` at `106f321`, post-Sprint-2 original audit). Goal: re-verify the 2.1.b deliverables against the spec and gap-fill anything missing.
+
+### Findings
+
+- **Spec coverage: complete.** Every spec element for both generators is present with correct semantics:
+  - `AmountTransformer.log_amount` = `np.log1p(TransactionAmt)` ✓
+  - `AmountTransformer.amount_decile` ∈ 0..9 via `pd.qcut` (fit) + `pd.cut` (transform) + clip ✓
+  - Negative-amount rejection in both `fit` and `transform` with a clear `ValueError` ✓
+  - `TimeFeatureGenerator` emits all six required columns (`hour_of_day`, `day_of_week`, `is_weekend`, `is_business_hours`, `hour_sin`, `hour_cos`) ✓
+  - Cyclical encoding: `2π · hour / 24` → `sin` / `cos` ✓
+- **All 5 spec-required tests are present** plus 12 contract / property / pipeline tests (17 total).
+- **No `TODO` / `FIXME` / `XXX` / `HACK` markers** in `tier1_basic.py` (Amount + Time region) or `test_tier1_amount_time.py`. The grep hit on line 179 of the test file is the comment `# 50-char floor catches a future "TODO" stub.` — a meta-comment about the rationale-length assertion, not an actual TODO.
+- **No skipped or `xfail`-marked tests.**
+- **Module growth is normal evolution, not doc drift.** The 2.1.b report records `tier1_basic.py` at 282 LOC; the file is now 663 LOC because 2.1.c added `EmailDomainExtractor` + `MissingIndicatorGenerator` to the same module. The 2.1.b region's LOC is unchanged; the 2.1.c additions appear in the 2.1.c report.
+
+### Verification (audit run)
+
+```
+$ uv run pytest tests/unit/test_tier1_amount_time.py -v
+17 passed, 14 warnings in 4.62s
+```
+
+### Conclusion
+
+No code changes required. The 2.1.b deliverables (`AmountTransformer` + `TimeFeatureGenerator` + their 17 tests) are spec-complete and audit-clean.

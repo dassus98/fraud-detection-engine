@@ -236,3 +236,38 @@ Verification passed. Ready for John to commit on `sprint-2/prompt-2-2-d-target-e
 ```
 2.2.d: TargetEncoder (Tier-2 OOF target encoding) + pipeline polymorphism fix
 ```
+
+---
+
+## Audit (2026-04-28)
+
+Re-audit on branch `sprint-2/audit-and-gap-fill` (off `main` at `106f321`, post-Sprint-2 original audit). Goal: re-verify the 2.2.d deliverables against the spec and gap-fill anything missing.
+
+### Findings
+
+- **Spec coverage: complete.**
+  - 5-fold OOF target encoding for `addr1`, `card4`, `P_emaildomain` (configurable) ✓ — YAML default loads exactly these three; `n_splits = 5`.
+  - Each training row's encoded value uses a fold that does NOT contain it ✓ — `StratifiedKFold(shuffle=True)` over a fold-specific `global_rate`; verified bit-for-bit by `test_oof_excludes_self_fold`.
+  - Val/test use a full-train encoder ✓ — `fit_transform` ALSO calls `self.fit(df)` so `mappings_` and `global_rates_` are populated for downstream `transform(val)`.
+  - Additive smoothing `(sum + α × global_rate) / (count + α)`, α default 10, configurable ✓.
+  - Property: α → ∞ produces a constant equal to the global rate ✓ (`test_alpha_infinity_yields_global_rate` on the full-train path; documented carefully in the test docstring because the OOF folds carry their own fold-specific global rates).
+  - **Critical: shuffled-labels leak test, val AUC < 0.55** ✓ — **val_auc = 0.4943** in this audit run, identical to the original report's value.
+  - "BaseFeatureGenerator contract may need a subclass — document clearly" → no new ABC; the `fit_transform` override pattern is the cleanest design and is documented in the class docstring (Decision 1).
+- **No `TODO` / `FIXME` / `XXX` / `HACK` markers** in any 2.2.d artefact.
+- **No skipped or `xfail`-marked tests.** The leak-gate test is skip-gated on `data/raw/MANIFEST.json` like every other real-data integration test (the standard pattern).
+- **The `pipeline.py` 1-line polymorphism fix is in place and verified.** Confirmed at [pipeline.py:147](src/fraud_engine/features/pipeline.py:147) (`current = gen.fit_transform(current)`), with the inline comment block (lines 138-147) documenting the rationale. Without this fix, the leak-gate test would fire — its passing is the regression test.
+- **Reproducibility: shuffled-labels val AUC is identical across runs** (0.4943 in both the original 2026-04-27 audit, the 2026-04-28 Sprint-2 audit, and this re-audit). The leak-gate is deterministic on the project's seed.
+
+### Verification (audit run)
+
+```
+$ uv run pytest tests/unit/test_tier2_target_encoder.py tests/integration/test_tier2_no_target_leak.py -v -s
+[leak-gate] val_auc = 0.4943  ceiling = 0.5500
+13 passed, 480 warnings in 43.12s
+```
+
+(12 unit tests + 1 integration leak-gate test = 13 total; run via §17 daemon. Wall-clock 43.12 s — slightly faster than the original 48.25 s likely due to warm parquet cache.)
+
+### Conclusion
+
+No code changes required. The 2.2.d deliverables (`TargetEncoder` + `target_encoder.yaml` + `pipeline.py` 1-line polymorphism fix + 12 unit tests + 1 integration leak-gate) are spec-complete and audit-clean. The headline result — **val_auc = 0.4943 < 0.5500 ceiling** — is unchanged and the project's strongest defence against catastrophic target leakage continues to hold.
