@@ -189,3 +189,41 @@ Verification passed. Ready for John to commit on `sprint-2/prompt-2-3-a-behavior
 ```
 2.3.a: BehavioralDeviation + ColdStartHandler (Tier-3 first generators)
 ```
+
+---
+
+## Audit (2026-04-28)
+
+Re-audit on branch `sprint-2/audit-and-gap-fill` (off `main` at `106f321`, post-Sprint-2 original audit). Goal: re-verify the 2.3.a deliverables against the spec and gap-fill anything missing.
+
+### Findings
+
+- **Spec coverage: complete.**
+  - `BehavioralDeviation` emits all 5 spec-required features: `amt_zscore_vs_card1_history`, `time_since_last_txn_zscore`, `addr_change_flag`, `device_change_flag`, `hour_deviation` ✓.
+  - z-scores use sample std (ddof=1) with ε smoothing in the denominator; first-event / n=1-prior fallback to 0 (= "exactly the mean" = "not anomalous") ✓.
+  - `addr_change_flag` uses the card's prior **mode** addr1 via `Counter.most_common(1)` ✓.
+  - `device_change_flag` uses set-membership against the card's prior device set ✓.
+  - `hour_deviation = abs(current_hour − prior_mean_hour)` ✓.
+  - `ColdStartHandler` emits `is_coldstart_{entity}` flags; default `min_history = 3`; multi-entity supported ✓.
+  - All past-only via the same tied-group two-pass pattern as `VelocityCounter` / `HistoricalStats` ✓; both classes' headline columns pass `assert_no_future_leak`.
+  - Tests: 17 across 4 classes (10 BehavioralDeviation + 3 ColdStartHandler + 2 temporal-safety + 2 config-load) — all spec-required surfaces covered.
+- **No `TODO` / `FIXME` / `XXX` / `HACK` markers** in `tier3_behavioral.py` or `test_tier3_behavioral.py`.
+- **No skipped or `xfail`-marked tests.**
+- **Spec interpretation: "population-level fallback" = 0 (= mean of mean = no anomaly).** The implementation does not compute explicit population-level mean / std; instead it uses 0 as the "not anomalous" anchor on the z-score scale. The `ColdStartHandler` flag carries the "this is a placeholder, not a verdict" signal separately — Decision 3 in the original report. Re-reviewed and confirmed sound: an explicit population-level mean would produce the same numerical effect (z = 0 when value = mean) while adding state to recompute on every transform.
+- **Orphan key in `tier3_config.yaml` is intentional documented forward-looking work, not a gap-fill candidate for this audit.** `tier3_config.yaml` (added in 2.3.b for NanGroupReducer) carries `coldstart_min_history: 5` with an explicit header note that the key is reserved and not yet wired. `ColdStartHandler` continues to read `coldstart.yaml` with default 3. Migrating now would:
+  1. Change behavior (more rows flagged coldstart at N=5 vs N=3).
+  2. Affect Sprint 3's hyperparameter tuning baseline (cold-start fraction shifts).
+  3. Reduce information density of the documented context (`tier3_config.yaml`'s header note explains the deferred state).
+  Defer to Sprint 3 (where hyperparameter tuning will revisit cold-start as part of the AUC recovery work). Status unchanged from the original Sprint-2 audit.
+- **Per-card state lifecycle.** `BehavioralDeviation.transform`'s `defaultdict(_new_card_state)` accumulates entries for every card seen during a single `transform` call. State resets each call (matches `VelocityCounter` / `HistoricalStats` semantics). For a 590k-row × ~14k-card frame, peak memory is a few MB — well within budget.
+
+### Verification (audit run)
+
+```
+$ uv run pytest tests/unit/test_tier3_behavioral.py -v
+17 passed, 14 warnings in 2.68s
+```
+
+### Conclusion
+
+No code changes required. The 2.3.a deliverables (`BehavioralDeviation` + `ColdStartHandler` + 2 YAML configs + 17 tests) are spec-complete and audit-clean. The documented `tier3_config.yaml` orphan key is a known forward-looking reservation; the original Sprint-2 audit's "Sprint 3 pickup" classification stands.

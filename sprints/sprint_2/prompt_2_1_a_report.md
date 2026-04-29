@@ -141,3 +141,28 @@ The +8 from this prompt sums with prior counts — pytest collection has histori
 - [x] Per the user directive: agent will push + open PR after John commits, then ask permission for squash-merge
 
 Verification passed. Ready for John to commit on `sprint-2/prompt-2-1-a-feature-base-and-pipeline`.
+
+---
+
+## Audit (2026-04-28)
+
+Re-audit on branch `sprint-2/audit-and-gap-fill` (off `main` at `106f321`, post-Sprint-2 original audit). Goal: re-verify the 2.1.a deliverables against the spec and gap-fill anything missing.
+
+### Findings
+
+- **Spec coverage: complete.** All 3 spec-required tests are present (concrete-subclass-missing-method failure, pipeline fit→transform produces expected columns, pipeline save→load→transform produces identical output). Six additional contract tests exceed the spec (ABC base instantiation guard, default `fit_transform` composition, `last_output_dtypes` population, manifest shape assertions, custom `pipeline_filename` round-trip, `load` type-guard).
+- **No `TODO` / `FIXME` / `XXX` / `HACK` markers** in `base.py`, `pipeline.py`, `__init__.py`, or `test_feature_base.py`.
+- **No skipped or `xfail`-marked tests.**
+- **One minor doc drift:** the 2026-04-27 report records **8 unit tests**; the current `tests/unit/test_feature_base.py` holds **9 tests**. The extra test is `test_save_and_load_with_custom_filename`, added during prompt 2.1.d when tier-specific pipeline filenames (`tier1_pipeline.joblib`, etc.) were introduced so `models/pipelines/` could host multiple tiers. Headline green status is unchanged. The test inventory table above pre-dates the addition.
+- **Pipeline polymorphism fix from 2.2.d is in place** (`pipeline.py` lines 138–147 — `current = gen.fit_transform(current)` instead of `gen.fit(current).transform(current)`). Identity-preserving for stateless generators; engages `TargetEncoder`'s OOF override under composition.
+
+### Verification (audit run)
+
+```
+$ uv run pytest tests/unit/test_feature_base.py -v
+9 passed, 14 warnings in 3.57s
+```
+
+### Conclusion
+
+No code changes required. The 2.1.a deliverables are spec-complete and audit-clean.

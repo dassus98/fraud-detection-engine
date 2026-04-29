@@ -176,3 +176,34 @@ Success: no issues found in 26 source files
 - [x] No source files outside the listed set are modified
 
 Verification passed. Ready for John to commit on `sprint-2/prompt-2-1-c-tier1-email-and-missing`.
+
+---
+
+## Audit (2026-04-28)
+
+Re-audit on branch `sprint-2/audit-and-gap-fill` (off `main` at `106f321`, post-Sprint-2 original audit). Goal: re-verify the 2.1.c deliverables against the spec and gap-fill anything missing.
+
+### Findings
+
+- **Spec coverage: complete.** Every spec element present:
+  - `EmailDomainExtractor.{provider, tld}` split via null-safe `rsplit(".", 1)` ✓
+  - `is_free` / `is_disposable` flags (column-prefixed `{col}_is_free` / `{col}_is_disposable` — documented deviation from spec's bare names; necessary for the two-email-column setup) ✓
+  - `configs/email_providers.yaml` ships **25 free providers** (spec asked 20–30) and **15 disposable providers** (spec asked 10–20) plus `missing_indicator_threshold: 0.05` ✓
+  - Nulls passed through as `<NA>` via `pd.Int8Dtype` flag columns ✓
+  - `MissingIndicatorGenerator` learns at fit, transforms same set on val/test ✓
+  - Threshold configurable via YAML or constructor ✓
+- **All spec-required tests present** (known-input → known-output, config-driven threshold). 18 tests total: 7 email + 6 missing + 4 contract + 1 pipeline-integration.
+- **No `TODO` / `FIXME` / `XXX` / `HACK` markers** in any 2.1.c artefact (`tier1_basic.py` Email/Missing region, `test_tier1_email_missing.py`, `email_providers.yaml`).
+- **No skipped or `xfail`-marked tests.**
+- **YAML semantic mismatch is a known design choice, not a gap.** The original 2.1.c report flags that `email_providers.yaml` also holds `missing_indicator_threshold` (which isn't an email concern). The original report explicitly chose to follow the spec wording verbatim and defer a future split (`email_providers.yaml` + `tier1_features.yaml`). Re-evaluated this audit and confirmed: no rename is justified now. The YAML is read from a single module and a rename would touch every test that constructs the generator with the default config path, for cosmetic gain only.
+
+### Verification (audit run)
+
+```
+$ uv run pytest tests/unit/test_tier1_email_missing.py -v
+18 passed, 14 warnings in 3.67s
+```
+
+### Conclusion
+
+No code changes required. The 2.1.c deliverables (`EmailDomainExtractor` + `MissingIndicatorGenerator` + `email_providers.yaml` + 18 tests) are spec-complete and audit-clean.

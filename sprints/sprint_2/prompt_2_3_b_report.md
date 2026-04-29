@@ -328,3 +328,38 @@ Verification passed. Ready for John to commit on `sprint-2/prompt-2-3-b-v-reduct
 ```
 2.3.b: NanGroupReducer (V-feature reduction by NaN-group correlation/PCA)
 ```
+
+---
+
+## Audit (2026-04-28)
+
+Re-audit on branch `sprint-2/audit-and-gap-fill` (off `main` at `106f321`, post-Sprint-2 original audit). Goal: re-verify the 2.3.b deliverables against the spec and gap-fill anything missing.
+
+### Findings
+
+- **Spec coverage: complete.**
+  - `NanGroupReducer` identifies NaN-groups via SHA-256 of each column's `isna()` byte vector ✓.
+  - Correlation mode: greedy keep-by-target-correlation; drop siblings whose `|ρ(kept, sibling)| > correlation_threshold` (default 0.95) ✓.
+  - PCA mode: `StandardScaler` + `PCA(n_components=pca_variance_threshold)` per group; output columns `v_group_{i}_pc_{j}` ✓.
+  - Method selected via `tier3_config.yaml:v_reduction_method` ✓.
+  - All 4 spec-required YAML keys present in `tier3_config.yaml`: `nan_group_correlation_threshold`, `v_reduction_method`, `pca_variance_threshold`, `coldstart_min_history` (last is forward-looking, documented).
+  - `v_reduction_manifest.json` lists every dropped column with reason (`"correlated_with_{anchor}"` for correlation mode; `"replaced_by_pca"` for PCA mode) ✓.
+  - `reports/v_feature_reduction_report.md` ships kept/dropped counts (339 → 281/58) and before/after val AUC (0.9143 → 0.9099) ✓.
+  - 19 tests across 6 classes (NaN-group identification, correlation mode, PCA mode, manifest, config-load, edge cases) — all spec-required surfaces covered.
+- **No `TODO` / `FIXME` / `XXX` / `HACK` markers** in `v_reduction.py` or `test_v_reduction.py`.
+- **No skipped or `xfail`-marked tests.**
+- **Profile script + manifest + summary on disk.** `models/pipelines/v_reduction_manifest.json` (24 KB) and `v_reduction_summary.json` (256 B) are present from the original 2.3.b run (timestamps 2026-04-28 12:39/40); `reports/v_feature_reduction_report.md` is committed (gitignore exception per the original report's Files-changed table).
+- **`scripts/profile_v_reduction.py`** is documented as a deliberate beyond-spec addition (Decision 6 in the original report) — necessary to populate the data-science report's real-data AUC numbers and reusable provenance for Sprint 3's tuning sweep. Confirmed appropriate.
+- **Documented val-AUC delta (−0.0043) is unchanged and out-of-scope for this audit.** Sprint 3's tuning sweep is the natural recovery point — same posture as the original Sprint-2 audit's "Sprint 3 pickup list" item #2 (`re-evaluate nan_group_correlation_threshold`).
+- **Documented exception to BaseFeatureGenerator's "preserve all columns" contract is sound.** `NanGroupReducer` is the **one exception** — it exists to remove columns. The class docstring documents this; canonical pipeline placement is AFTER all column-adding generators (Tier 1-3) so no downstream stage references the dropped V columns. Confirmed by tracing the 2.3.c build pipeline order.
+
+### Verification (audit run)
+
+```
+$ uv run pytest tests/unit/test_v_reduction.py -v
+19 passed, 14 warnings in 2.44s
+```
+
+### Conclusion
+
+No code changes required. The 2.3.b deliverables (`NanGroupReducer` + `tier3_config.yaml` + 19 tests + `profile_v_reduction.py` + `v_feature_reduction_report.md` + manifest + summary) are spec-complete and audit-clean. The val-AUC delta (−0.0043) remains the documented Sprint-3 pickup item.

@@ -171,3 +171,35 @@ tests/lineage/test_temporal_guards.py::TestTimestampTies::test_ties_on_timestamp
 - [x] No source files outside the listed set are modified
 
 Verification passed. Ready for John to commit on `sprint-2/prompt-2-2-a-temporal-guards`.
+
+---
+
+## Audit (2026-04-28)
+
+Re-audit on branch `sprint-2/audit-and-gap-fill` (off `main` at `106f321`, post-Sprint-2 original audit). Goal: re-verify the 2.2.a deliverables against the spec and gap-fill anything missing.
+
+### Findings
+
+- **Spec coverage: complete.**
+  - `assert_no_future_leak(feature_df, source_df, feature_func, timestamp_col, n_samples)` ✓ — signature matches; `seed` added beyond spec for reproducibility (documented deviation).
+  - Past-only recompute + identity assert ✓ — `<=` boundary (vs spec's `<`) is the documented Decision 1: keeps the contract simple for self-including features (`log_amount`, `amount_decile`); leakage detection unaffected. Pairs with `TemporalSafeGenerator.transform`'s strict `<` for the row-iterating reference.
+  - `class TemporalSafeGenerator(BaseFeatureGenerator)` with abstract `_compute_for_row(row, past_df)` ✓
+  - `transform()` calls `_compute_for_row` for every row in temporal order ✓
+  - Test: synthetic generator that leaks → assertion catches ✓ (`_leaky_lead1`)
+  - Test: synthetic generator that uses only past → passes ✓ (`_safe_lag1`)
+  - Test: first row has no past → handled ✓ (`test_first_row_nan_handled`)
+- **No `TODO` / `FIXME` / `XXX` / `HACK` markers** in `temporal_guards.py` or `test_temporal_guards.py`.
+- **No skipped or `xfail`-marked tests.**
+- **Documented strict-`<` vs `<=` asymmetry between primitives is correct.** Confirmed by re-reading the module docstring (lines 37–55) and Decision 1 in this report. The two boundaries are intentional — strict `<` for the row-iterating reference (mirrors real-time serving), `<=` for the assertion (allows self-including features). Subsequent prompts (2.2.b, 2.2.c, 2.2.d, 2.3.a, 2.3.c) all rely on this contract; changing it now would ripple into ~1300 leak-check sites.
+- **Universal-helper status confirmed.** `assert_no_future_leak` is invoked from 7 downstream test files (`test_tier2_velocity.py`, `test_tier2_historical.py`, `test_tier2_target_encoder.py`, `test_tier2_temporal_integrity.py`, `test_tier3_behavioral.py`, `test_tier3_lineage.py`, plus the 2.3.a generator-level smoke check). Total leak checks across Sprint 2: ~1300+ as catalogued in the original audit report.
+
+### Verification (audit run)
+
+```
+$ uv run pytest tests/lineage/test_temporal_guards.py -v
+11 passed, 14 warnings in 2.48s
+```
+
+### Conclusion
+
+No code changes required. The 2.2.a deliverables (`assert_no_future_leak` + `TemporalSafeGenerator` + 11 contract tests) are spec-complete and audit-clean. The two documented spec deviations (the `<=` recomputation boundary and the `seed` parameter) are sound design choices that are now load-bearing for ~1300 downstream leak checks.
