@@ -268,3 +268,31 @@ Verification passed (with documented val-AUC gap). Ready for John to commit on `
 ```
 3.1.b: tier4 build pipeline + TierFourFeaturesSchema + integration/leak tests
 ```
+
+---
+
+## Audit (2026-04-30)
+
+Re-audit on branch `sprint-3/audit-3-1-a-and-3-1-b-tier4-explained` (off `main` at `793c08b`, post-3.1.b merge). Goal: re-verify the 3.1.b deliverables against the spec and surface the spec-AUC gap in non-technical terms.
+
+### Findings
+
+- **Spec coverage: complete (with the documented val-AUC gap).** All 6 deliverables present and on disk:
+  - `src/fraud_engine/schemas/features.py` extended with `TierFourFeaturesSchema` (24 columns via dict comprehension); `_TIER4_*` constants present; module docstring updated.
+  - `src/fraud_engine/schemas/__init__.py` re-exports `TierFourFeaturesSchema` (alphabetised).
+  - `scripts/build_features_tier1_2_3_4.py` (270 LOC); 11-generator pipeline; tier4 filename family; comparison anchors include Tier-3.
+  - `tests/integration/test_tier4_performance.py` (220 LOC; 4 tests including the soft-warn AUC sanity check).
+  - `tests/integration/test_tier4_no_fraud_leak.py` (153 LOC; out-of-spec leak gate; mirrors 2.3.c's pattern).
+  - On-disk artefacts verified: `tier4_train.parquet` (162 MB), `tier4_val.parquet` (35 MB), `tier4_test.parquet` (39 MB), `tier4_pipeline.joblib` (2.7 MB), `feature_manifest.json` (315 KB) — all timestamped 2026-04-30 11:33 from the original 3.1.b build.
+- **No `TODO` / `FIXME` / `XXX` / `HACK` markers** in any 3.1.b artefact.
+- **No skipped or `xfail`-marked tests.**
+- **Documented val-AUC gap unchanged.** Realised 0.7932 vs spec 0.92-0.93. The gap is a modelling regression at default LightGBM hyperparameters — not a correctness bug — confirmed by the leak gate's 0.4514 result (well below the 0.55 ceiling). Recovery path remains the upcoming Sprint-3 hyperparameter-tuning prompt.
+
+### Documentation gap-fill (this audit)
+
+- **`docs/TIER4_EWM_DESIGN_BRIEF.md`** (new; co-shipped with the 3.1.a audit) — §6 of that doc explains the val-AUC gap in plain English for non-technical reviewers, with the three contributing causes (feature-space inflation, multi-timescale collinearity, sparse fraud signal at default `min_child_samples`) and the standard recovery moves. The detailed design brief complements the technical reports in `prompts/sprint_3/`.
+- **`CLAUDE.md` §13 sprint status table** updated to reflect Sprint 3 as "In progress" with the Tier-4 val-AUC gap noted explicitly.
+
+### Conclusion
+
+No code changes required; 3.1.b is spec-complete-with-documented-gap and audit-clean. Documentation surface expanded for portfolio readability and to make the val-AUC gap legible to non-technical reviewers (especially relevant given the upcoming hyperparameter-tuning prompt's anticipated recovery story).

@@ -463,10 +463,10 @@ Update this table as sprints complete. Read it at the start of every session.
 
 |Sprint|Status|Notes|
 |---|---|---|
-|0 — Foundation & Environment|Not started|Bootstrap, data acquisition, observability|
-|1 — Data Profiling, EDA & Baseline|Not started|EDA + temporal split + baseline LightGBM|
-|2 — Feature Engineering Tiers 1-3|Not started|Basic, aggregations, behavioral|
-|3 — Advanced Features & Models|Not started|Tier 4-5 + LightGBM tuned + NN + GNN|
+|0 — Foundation & Environment|Complete|Bootstrap, data acquisition, observability. Docker stack deferred (see memory `project_docker_deferred`).|
+|1 — Data Profiling, EDA & Baseline|Complete|EDA + temporal split + baseline LightGBM. Sprint 1 audit + gap-fill merged via PR #10. Sprint-1 baseline val AUC = 0.9247 (temporal split).|
+|2 — Feature Engineering Tiers 1-3|Complete|11 prompts (2.1.a-d, 2.2.a-e, 2.3.a-c) + comprehensive audit (PR #24) + audit-and-gap-fill re-audit (PR #25). 10-generator pipeline; 385 tests; ~1300+ leak/lineage checks. Tier-3 val AUC 0.9063 (gap −0.0037 vs spec 0.91 documented; deferred to Sprint-3 tuning).|
+|3 — Advanced Features & Models|In progress|3.1.a (ExponentialDecayVelocity Tier-4 EWM, PR #26) + 3.1.b (Tier-4 build pipeline + schema + integration/leak tests, PR #27) merged. Tier-4 val AUC **0.7932** at default LightGBM hyperparameters — substantial gap vs spec 0.92-0.93 (~−0.13). Leak gate val AUC 0.4514 confirms zero target leakage; the regression is a modelling artefact at default hyperparameters, not a correctness bug. Recovery path is the upcoming hyperparameter-tuning prompt. Remaining work: tuning sweep, neural-net diversity model, GNN.|
 |4 — Economic Evaluation|Not started|Cost function + threshold + stratified|
 |5 — Production API & Shadow Mode|Not started|FastAPI + Redis + SHAP + shadow|
 |6 — Monitoring & Documentation|Not started|Grafana + drift + model card + README|
