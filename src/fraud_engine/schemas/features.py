@@ -1,15 +1,21 @@
-"""Pandera schemas for the post-Tier-1 and post-Tier-2 feature pipeline outputs.
+"""Pandera schemas for the per-tier feature pipeline outputs.
 
 `TierOneFeaturesSchema` is the outbound contract of
 `scripts/build_features_tier1.py` (T1 generators only).
 `TierTwoFeaturesSchema` extends it with the 20 deterministic Tier-2
 columns produced by `VelocityCounter`, `HistoricalStats`, and
-`TargetEncoder`; it is the outbound contract of
-`scripts/build_features_tier1_2.py` and validates every frame written
-to `data/processed/tier2_{train,val,test}.parquet`. Every Sprint 3+
-model and Sprint 4 evaluator reads from those parquets, so catching
-feature-pipeline drift at this boundary protects every downstream
-stage.
+`TargetEncoder`; outbound contract of
+`scripts/build_features_tier1_2.py`. `TierThreeFeaturesSchema`
+extends Tier-2 with 6 deterministic Tier-3 columns produced by
+`BehavioralDeviation` and `ColdStartHandler`; outbound contract of
+`scripts/build_features_tier1_2_3.py`. `TierFourFeaturesSchema`
+extends Tier-3 with the 24 EWM columns produced by
+`ExponentialDecayVelocity` (4 entities × 3 λ × 2 signals); outbound
+contract of `scripts/build_features_tier1_2_3_4.py` and validates
+every frame written to `data/processed/tier4_*.parquet`. Every
+Sprint 3+ model and Sprint 4 evaluator reads from these parquets,
+so catching feature-pipeline drift at this boundary protects every
+downstream stage.
 
 Business rationale:
     Sprint 3's LightGBM tuning, Sprint 4's economic-cost evaluation,
@@ -49,10 +55,12 @@ Version history:
         Tier-1 columns; `is_null_*` columns from
         `MissingIndicatorGenerator` pass through via inherited
         `strict=False`. Tier-2 schema (added in 2.2.e) extends Tier-1
-        with 20 more columns; `FEATURE_SCHEMA_VERSION` stays at 1
-        because Tier-2 is an additive extension and the manifest
-        JSON shape (`_FEATURE_MANIFEST_SCHEMA_VERSION` in
-        `pipeline.py`) hasn't changed. The 2.1.d
+        with 20 more columns; Tier-3 schema (added in 2.3.c) extends
+        Tier-2 with 6 more columns; Tier-4 schema (added in 3.1.b)
+        extends Tier-3 with 24 EWM columns. `FEATURE_SCHEMA_VERSION`
+        stays at 1 because every tier addition is purely additive and
+        the manifest JSON shape (`_FEATURE_MANIFEST_SCHEMA_VERSION`
+        in `pipeline.py`) hasn't changed. The 2.1.d
         `test_manifest_schema_version_matches` test continues to
         pass under this convention.
 """
@@ -124,6 +132,27 @@ _TARGET_ENC_COLUMNS: Final[tuple[str, ...]] = ("card4", "addr1", "P_emaildomain"
 # [0, 24). Schema bound is closed on the left and open on the right.
 _HOUR_DEV_MIN: Final[float] = 0.0
 _HOUR_DEV_MAX: Final[float] = 24.0
+
+# ---------------- Tier-4 column-range constants ---------------- #
+#
+# `ExponentialDecayVelocity`: per-(entity, λ) exponentially-decayed
+# sums of strictly-past events. Always non-negative (`math.exp` never
+# returns negative); unbounded above (practically O(few tens) for
+# active entities). NaN entity → 0.0; unseen entity at val/test → 0.0;
+# first event for an entity → 0.0 pass-1 read. nullable=False holds
+# in all cases.
+
+_TIER4_ENTITIES: Final[tuple[str, ...]] = (
+    "card1",
+    "addr1",
+    "DeviceInfo",
+    "P_emaildomain",
+)
+_TIER4_LAMBDAS: Final[tuple[float, ...]] = (0.05, 0.1, 0.5)
+# Mirrors `tier4_decay._LAMBDA_FORMAT_SPEC` — must match the column-name
+# format the generator produces (`f"{λ:g}"`).
+_TIER4_FORMAT_SPEC: Final[str] = "g"
+_EWM_MIN: Final[float] = 0.0
 
 
 TierOneFeaturesSchema: Final[DataFrameSchema] = InterimTransactionSchema.add_columns(
@@ -283,8 +312,31 @@ TierThreeFeaturesSchema: Final[DataFrameSchema] = TierTwoFeaturesSchema.add_colu
 )
 
 
+TierFourFeaturesSchema: Final[DataFrameSchema] = TierThreeFeaturesSchema.add_columns(
+    {
+        # ---------------- ExponentialDecayVelocity ---------------- #
+        # 4 entities × 3 λ × 2 signals (v_ewm + fraud_v_ewm) = 24 columns.
+        # All float, nullable=False (always emit a number; 0.0 for first
+        # event / unseen entity / NaN entity), strictly non-negative
+        # (math.exp never returns < 0). Unbounded above by design.
+        **{
+            f"{entity}_{suffix}_lambda_{lam:{_TIER4_FORMAT_SPEC}}": Column(
+                float,
+                Check.greater_than_or_equal_to(_EWM_MIN),
+                nullable=False,
+                required=True,
+            )
+            for entity in _TIER4_ENTITIES
+            for lam in _TIER4_LAMBDAS
+            for suffix in ("v_ewm", "fraud_v_ewm")
+        },
+    }
+)
+
+
 __all__ = [
     "FEATURE_SCHEMA_VERSION",
+    "TierFourFeaturesSchema",
     "TierOneFeaturesSchema",
     "TierThreeFeaturesSchema",
     "TierTwoFeaturesSchema",

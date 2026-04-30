@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fraud_engine.schemas.features import (
     FEATURE_SCHEMA_VERSION,
+    TierFourFeaturesSchema,
     TierOneFeaturesSchema,
     TierThreeFeaturesSchema,
     TierTwoFeaturesSchema,
@@ -26,6 +27,7 @@ __all__ = [
     "InterimTransactionSchema",
     "MergedSchema",
     "SCHEMA_VERSION",
+    "TierFourFeaturesSchema",
     "TierOneFeaturesSchema",
     "TierThreeFeaturesSchema",
     "TierTwoFeaturesSchema",
