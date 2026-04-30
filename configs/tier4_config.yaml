@@ -1,0 +1,41 @@
+# Tier-4 exponential-decay velocity (EWM) configuration. Drives
+# `ExponentialDecayVelocity` defaults in
+# `src/fraud_engine/features/tier4_decay.py`.
+#
+# Output columns per (entity, λ):
+#   {entity}_v_ewm_lambda_{λ}
+#   {entity}_fraud_v_ewm_lambda_{λ}        (when fraud_weighted: true)
+#
+# Decay formula (λ is per-hour, TransactionDT is integer seconds):
+#   weight_i = exp(-λ · Δt_hours)
+#   Δt_hours = (T_event - T_i) / 3600.0
+#   v_ewm    = Σ over strictly-past events for the same entity
+#
+# Half-life = ln(2) / λ:
+#   λ = 0.05 / hour → 13.86 h (about half a day)
+#   λ = 0.10 / hour →  6.93 h (one working day)
+#   λ = 0.50 / hour →  1.39 h (under 90 minutes)
+
+entities:
+  - card1            # primary card identifier; populated for every row
+  - addr1            # billing-address bucket; nullable
+  - DeviceInfo       # device fingerprint; nullable (~76% null per EDA)
+  - P_emaildomain    # purchaser email provider; nullable
+
+# Per-hour decay rates. List order is preserved in the output column
+# order. Adding a new λ here automatically adds `len(entities)` columns
+# (× 2 if fraud_weighted) to every Sprint 3+ training set.
+lambdas_per_hour:
+  - 0.05
+  - 0.1
+  - 0.5
+
+# When true, also emit `{entity}_fraud_v_ewm_lambda_{λ}` columns —
+# EWM weighted by past `is_fraud` labels. OOF-safe by construction
+# (read-before-push two-pass discipline; same pattern as TargetEncoder).
+fraud_weighted: true
+
+# Target column for the fraud-weighted variant. Only consumed when
+# fraud_weighted: true. Must be present in the training frame; absent
+# from val/test (those rows decay-and-read but never push labels).
+target_col: isFraud

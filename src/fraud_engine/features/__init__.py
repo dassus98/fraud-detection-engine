@@ -6,6 +6,9 @@ Public surface:
         (amount z-score, time z-score, addr/device change, hour deviation).
     ColdStartHandler: Tier-3 thin sibling that emits
         `is_coldstart_{entity}` flags for entities with thin history.
+    ExponentialDecayVelocity: Tier-4 per-(entity, λ) exponentially-decayed
+        velocity (EWM). O(1) running-state per event with read-before-push
+        two-pass discipline; fraud-weighted variant is OOF-safe.
     FeaturePipeline: sequential composition with save / load + manifest.
     HistoricalStats: Tier-2 per-entity rolling mean / std / max over
         an amount column. Captures expected-spending shape.
@@ -41,12 +44,14 @@ from fraud_engine.features.tier3_behavioral import (
     BehavioralDeviation,
     ColdStartHandler,
 )
+from fraud_engine.features.tier4_decay import ExponentialDecayVelocity
 from fraud_engine.features.v_reduction import NanGroupReducer
 
 __all__ = [
     "BaseFeatureGenerator",
     "BehavioralDeviation",
     "ColdStartHandler",
+    "ExponentialDecayVelocity",
     "FeaturePipeline",
     "HistoricalStats",
     "NanGroupReducer",
