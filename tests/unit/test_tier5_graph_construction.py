@@ -11,8 +11,11 @@ Five contract surfaces:
 - `TestSaveLoad`: joblib + manifest sidecar round-trip; reload
   produces a bit-identical graph; load rejects wrong object types.
 - `TestPerformance` (`@pytest.mark.slow`, skip-gated on
-  `MANIFEST.json`): full 590k IEEE-CIS train split; build memory
-  peak < 8 GB; build wall-time recorded for the report.
+  `data/raw/train_transaction.csv`): full 590k IEEE-CIS train
+  split; build memory peak < 8 GB; build wall-time recorded for the
+  report. The skip-gate checks the gitignored CSV (not the tracked
+  `MANIFEST.json` sidecar) so CI runners — which have the manifest
+  but never the data — skip cleanly.
 - `TestErrorHandling`: missing required columns raise `KeyError`;
   loading from a non-existent path raises `FileNotFoundError`.
 """
@@ -293,8 +296,15 @@ class TestSaveLoad:
 # ---------------------------------------------------------------------
 
 
-def _manifest_path() -> Path:
-    return get_settings().raw_dir / "MANIFEST.json"
+def _train_csv_path() -> Path:
+    """Path to the gitignored full IEEE-CIS train transactions CSV.
+
+    The presence of this CSV — not the always-tracked `MANIFEST.json`
+    sidecar — is what gates the full-data benchmark. CI runners get
+    `MANIFEST.json` from the repo but never the CSV, so checking the
+    manifest alone fails to skip the test on CI.
+    """
+    return get_settings().raw_dir / "train_transaction.csv"
 
 
 class TestPerformance:
@@ -309,8 +319,8 @@ class TestPerformance:
         Records peak heap allocation and build wall-time for the
         completion report.
         """
-        if not _manifest_path().is_file():
-            pytest.skip("data/raw/MANIFEST.json not present — run `make data-download`.")
+        if not _train_csv_path().is_file():
+            pytest.skip("data/raw/train_transaction.csv not present — run `make data-download`.")
 
         settings = get_settings()
         loader = RawDataLoader()

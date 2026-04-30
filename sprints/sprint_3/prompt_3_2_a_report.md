@@ -202,3 +202,47 @@ Verification passed. Ready for John to commit on `sprint-3/prompt-3-2-a-tier5-gr
 ```
 3.2.a: TransactionEntityGraph (Tier-5 bipartite graph construction)
 ```
+
+---
+
+## CI follow-up (2026-04-30)
+
+PR #29's first CI run (`actions/runs/25178729491`) failed inside the unit
+suite at `TestPerformance::test_full_data_memory_under_8gb`:
+
+```
+FileNotFoundError: Expected raw file at .../data/raw/train_transaction.csv
+```
+
+**Root cause.** The skip-gate guarded on `data/raw/MANIFEST.json`, but
+that file is **tracked in git** (it is the schema/version sidecar for
+the dataset, not the dataset itself). CI runners therefore have the
+manifest but never the gitignored CSVs — the gate evaluates *true*
+(manifest present), the test proceeds, and the loader hard-errors on
+the missing CSV. The pattern was inherited from
+`tests/integration/test_tier4_performance.py`, which works there only
+because integration tests are excluded from the CI unit run.
+
+**Fix.** Switch the skip-gate to check for the actual gitignored file
+(`data/raw/train_transaction.csv`) instead of the always-present
+manifest. Locally — where the CSV is on disk — the benchmark runs
+unchanged. On CI, the gate fires and the benchmark skips cleanly.
+Two lines of code (`_train_csv_path()` helper + the `pytest.skip`
+message), plus a docstring update at the top of the test module.
+
+**Re-verification.**
+- `make format && make lint && make typecheck` — all 0.
+- `uv run pytest tests/unit/test_tier5_graph_construction.py -v` — 15
+  passed in 59.07s (slow benchmark still executes locally; CSV
+  present here).
+
+**Files changed.** Only `tests/unit/test_tier5_graph_construction.py`
+(skip-gate + docstring). No production code touched.
+
+Verification re-passed. Ready for John to commit the CI fix on
+`sprint-3/prompt-3-2-a-tier5-graph-construction` (PR #29 will update on push).
+
+**Commit note (follow-up):**
+```
+3.2.a: tighten Tier-5 perf-test skip-gate to check CSV not MANIFEST
+```
