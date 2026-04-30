@@ -284,3 +284,29 @@ Verification passed. Ready for John to commit on `sprint-3/prompt-3-1-a-exponent
 ```
 3.1.a: ExponentialDecayVelocity (Tier-4 EWM with OOF-safe fraud weighting)
 ```
+
+---
+
+## Audit (2026-04-30)
+
+Re-audit on branch `sprint-3/audit-3-1-a-and-3-1-b-tier4-explained` (off `main` at `793c08b`, post-3.1.b merge). Goal: re-verify the 3.1.a deliverables against the spec and add non-technical-audience documentation.
+
+### Findings
+
+- **Spec coverage: complete.** All 4 deliverables present and on disk:
+  - `src/fraud_engine/features/tier4_decay.py` (716 LOC; teaching-document docstring + `_DecayState` + `ExponentialDecayVelocity` + helpers).
+  - `configs/tier4_config.yaml` (41 LOC; 4 keys).
+  - `tests/unit/test_tier4_decay.py` (411 LOC; 17 tests across 5 classes including hypothesis property + naive O(n²) reference).
+  - `src/fraud_engine/features/__init__.py` re-export verified at line 13 (`from fraud_engine.features.tier4_decay import ExponentialDecayVelocity`).
+- **No `TODO` / `FIXME` / `XXX` / `HACK` markers** in any 3.1.a artefact.
+- **No skipped or `xfail`-marked tests.**
+- **Module docstring teaching content** (~250 LOC) covers EWM concepts in plain English, the math demystified, why-EWM-vs-not, and 10 trade-offs with both sides. Augmented in this audit by the new `docs/TIER4_EWM_DESIGN_BRIEF.md` for portfolio reviewers / non-technical audiences.
+
+### Documentation gap-fill (this audit)
+
+- **`docs/TIER4_EWM_DESIGN_BRIEF.md` (new)** — comprehensive non-technical explainer covering: the fraud-detection problem Tier 4 solves; plain-English EWM intuition; a worked banking example with dollar costs; the 10 design decisions reframed for banking implications; how the generator would behave in a Sprint-5 production stack at a regulated bank; the val-AUC gap framed in plain English; deferred items; broader project context; glossary. ~580 LOC. Audience: hiring committees, fraud product managers, model risk officers.
+- **`CLAUDE.md` §13 sprint status table** updated (was stale at "Not started" for Sprints 0-3; now reflects actual state through 3.1.b).
+
+### Conclusion
+
+No code changes required; 3.1.a is spec-complete and audit-clean. Documentation surface expanded for portfolio readability without modifying any source / test / config files.
