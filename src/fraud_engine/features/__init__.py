@@ -21,6 +21,10 @@ Public surface:
     TemporalSafeGenerator: row-iterating ABC subclass that is leak-free
         by construction. Reference shape for tier 2-5 vectorized
         generators.
+    TransactionEntityGraph: Tier-5 bipartite graph linking transactions
+        to their entities (card1, addr1, DeviceInfo, P_emaildomain).
+        Construction primitive; subsequent prompts derive feature
+        columns from this graph.
     VelocityCounter: Tier-2 deque-based per-entity transaction counts
         over fixed lookback windows. Canonical fraud signal.
     assert_no_future_leak: sample-based test helper that catches
@@ -45,6 +49,7 @@ from fraud_engine.features.tier3_behavioral import (
     ColdStartHandler,
 )
 from fraud_engine.features.tier4_decay import ExponentialDecayVelocity
+from fraud_engine.features.tier5_graph import TransactionEntityGraph
 from fraud_engine.features.v_reduction import NanGroupReducer
 
 __all__ = [
@@ -57,6 +62,7 @@ __all__ = [
     "NanGroupReducer",
     "TargetEncoder",
     "TemporalSafeGenerator",
+    "TransactionEntityGraph",
     "VelocityCounter",
     "assert_no_future_leak",
 ]
