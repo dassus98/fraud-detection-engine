@@ -10,12 +10,16 @@ extends Tier-2 with 6 deterministic Tier-3 columns produced by
 `BehavioralDeviation` and `ColdStartHandler`; outbound contract of
 `scripts/build_features_tier1_2_3.py`. `TierFourFeaturesSchema`
 extends Tier-3 with the 24 EWM columns produced by
-`ExponentialDecayVelocity` (4 entities × 3 λ × 2 signals); outbound
-contract of `scripts/build_features_tier1_2_3_4.py` and validates
-every frame written to `data/processed/tier4_*.parquet`. Every
-Sprint 3+ model and Sprint 4 evaluator reads from these parquets,
-so catching feature-pipeline drift at this boundary protects every
-downstream stage.
+`ExponentialDecayVelocity` (4 entities × 3 λ × 2 signals).
+`TierFiveFeaturesSchema` extends Tier-4 with 8 graph-derived columns
+produced by `GraphFeatureExtractor`
+(`connected_component_size`, `entity_degree_{entity}` ×4,
+`fraud_neighbor_rate`, `pagerank_score`, `clustering_coefficient`);
+outbound contract of `scripts/build_features_all_tiers.py` and
+validates every frame written to `data/processed/tier5_*.parquet`.
+Every Sprint 3+ model and Sprint 4 evaluator reads from these
+parquets, so catching feature-pipeline drift at this boundary
+protects every downstream stage.
 
 Business rationale:
     Sprint 3's LightGBM tuning, Sprint 4's economic-cost evaluation,
@@ -153,6 +157,40 @@ _TIER4_LAMBDAS: Final[tuple[float, ...]] = (0.05, 0.1, 0.5)
 # format the generator produces (`f"{λ:g}"`).
 _TIER4_FORMAT_SPEC: Final[str] = "g"
 _EWM_MIN: Final[float] = 0.0
+
+# ---------------- Tier-5 column-range constants ---------------- #
+#
+# `GraphFeatureExtractor`: per-transaction graph features derived from
+# the bipartite TransactionEntityGraph. 8 columns total. ALL nullable=True
+# because val/test rows produce NaN for txn-level features (the val txn is
+# not in the training graph by temporal-safety contract) AND for entity-
+# level features when the row's entity value is unseen / missing.
+
+_TIER5_ENTITIES: Final[tuple[str, ...]] = (
+    "card1",
+    "addr1",
+    "DeviceInfo",
+    "P_emaildomain",
+)
+# `connected_component_size`: Latapy CC; ≥ 1 (a singleton txn with all-
+# NaN entities is its own component of size 1). Cap is "≤ n_train_nodes"
+# in principle but we don't enforce an upper bound because the schema
+# is split-agnostic — train_out's CC sizes can reach low hundreds of
+# thousands on the IEEE-CIS scale.
+_CC_SIZE_MIN: Final[float] = 1.0
+# `entity_degree_*`: ≥ 1 when the entity is in the graph (the row itself
+# contributes one edge), ≥ 0 because lower bound 0 leaves room for
+# pre-fit defensive defaults.
+_ENTITY_DEGREE_MIN: Final[float] = 0.0
+# `fraud_neighbor_rate` and `clustering_coefficient`: probabilities in
+# [0, 1]. Tiny float-noise slop on each side so numerical drift at the
+# precision boundary doesn't trip validation.
+_RATE_MIN: Final[float] = -1e-6
+_RATE_MAX: Final[float] = 1.0 + 1e-6
+# `pagerank_score`: networkx pagerank values are non-negative; sum of
+# all node pageranks normalises to 1, so individual values lie in
+# (0, 1]. We enforce the lower bound only.
+_PAGERANK_MIN: Final[float] = -1e-9
 
 
 TierOneFeaturesSchema: Final[DataFrameSchema] = InterimTransactionSchema.add_columns(
@@ -334,8 +372,58 @@ TierFourFeaturesSchema: Final[DataFrameSchema] = TierThreeFeaturesSchema.add_col
 )
 
 
+TierFiveFeaturesSchema: Final[DataFrameSchema] = TierFourFeaturesSchema.add_columns(
+    {
+        # ---------------- GraphFeatureExtractor ---------------- #
+        # 8 columns per row. ALL nullable=True because:
+        #   - val/test rows: txn-level features (CC size, pagerank,
+        #     clustering) emit NaN by design (val txn not in training
+        #     graph).
+        #   - cold-start entity values: entity_degree_X NaN if the row's
+        #     entity value isn't in the training graph.
+        #   - zero-denominator: fraud_neighbor_rate NaN if the row's
+        #     seen entities collectively have no training-graph
+        #     neighbours.
+        "connected_component_size": Column(
+            float,
+            Check.greater_than_or_equal_to(_CC_SIZE_MIN),
+            nullable=True,
+            required=True,
+        ),
+        **{
+            f"entity_degree_{entity}": Column(
+                float,
+                Check.greater_than_or_equal_to(_ENTITY_DEGREE_MIN),
+                nullable=True,
+                required=True,
+            )
+            for entity in _TIER5_ENTITIES
+        },
+        "fraud_neighbor_rate": Column(
+            float,
+            Check.in_range(_RATE_MIN, _RATE_MAX, include_min=True, include_max=True),
+            nullable=True,
+            required=True,
+        ),
+        "pagerank_score": Column(
+            float,
+            Check.greater_than_or_equal_to(_PAGERANK_MIN),
+            nullable=True,
+            required=True,
+        ),
+        "clustering_coefficient": Column(
+            float,
+            Check.in_range(_RATE_MIN, _RATE_MAX, include_min=True, include_max=True),
+            nullable=True,
+            required=True,
+        ),
+    }
+)
+
+
 __all__ = [
     "FEATURE_SCHEMA_VERSION",
+    "TierFiveFeaturesSchema",
     "TierFourFeaturesSchema",
     "TierOneFeaturesSchema",
     "TierThreeFeaturesSchema",

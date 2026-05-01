@@ -42,6 +42,7 @@ nb-test:  ## Execute notebooks end-to-end via nbmake (catches util-rename drift)
 
 notebooks:  ## Rebuild + execute every committable notebook in place (commit-ready).
 	uv run python scripts/_build_eda_notebook.py
+	uv run python scripts/_build_graph_analysis_notebook.py
 	uv run jupyter nbconvert --to notebook --execute --inplace notebooks/00_observability_demo.ipynb
 
 data-download:  ## Fetch IEEE-CIS from Kaggle into data/raw/ and write the manifest.

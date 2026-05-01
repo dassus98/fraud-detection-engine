@@ -132,7 +132,7 @@ def _build_pipeline() -> FeaturePipeline:
 def _select_lgbm_features(df: pd.DataFrame) -> list[str]:
     """Return the subset of columns LightGBM's sklearn API can ingest.
 
-    Mirrors `scripts/build_features_tier1_2_3_4.py:_select_lgbm_features`.
+    Mirrors `scripts/build_features_all_tiers.py:_select_lgbm_features`.
     Drops non-feature columns and any object/string-dtype columns
     (provider/tld would need explicit categorical-feature enumeration).
     """
