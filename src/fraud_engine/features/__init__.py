@@ -10,6 +10,12 @@ Public surface:
         velocity (EWM). O(1) running-state per event with read-before-push
         two-pass discipline; fraud-weighted variant is OOF-safe.
     FeaturePipeline: sequential composition with save / load + manifest.
+    GraphFeatureExtractor: Tier-5 per-transaction graph features
+        derived from the bipartite TransactionEntityGraph. Five
+        distinct features (8 columns): connected_component_size,
+        entity_degree_{entity} (×4), fraud_neighbor_rate (OOF-safe),
+        pagerank_score, clustering_coefficient. Cold-start val/test
+        rows emit NaN for txn-level features.
     HistoricalStats: Tier-2 per-entity rolling mean / std / max over
         an amount column. Captures expected-spending shape.
     NanGroupReducer: Tier-3 V-feature reducer that drops redundant
@@ -49,7 +55,10 @@ from fraud_engine.features.tier3_behavioral import (
     ColdStartHandler,
 )
 from fraud_engine.features.tier4_decay import ExponentialDecayVelocity
-from fraud_engine.features.tier5_graph import TransactionEntityGraph
+from fraud_engine.features.tier5_graph import (
+    GraphFeatureExtractor,
+    TransactionEntityGraph,
+)
 from fraud_engine.features.v_reduction import NanGroupReducer
 
 __all__ = [
@@ -58,6 +67,7 @@ __all__ = [
     "ColdStartHandler",
     "ExponentialDecayVelocity",
     "FeaturePipeline",
+    "GraphFeatureExtractor",
     "HistoricalStats",
     "NanGroupReducer",
     "TargetEncoder",
