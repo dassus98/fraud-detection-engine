@@ -9,18 +9,18 @@
 # (3.3.d) or invoke `run_tuning(...)` from a script / notebook.
 
 best_params:
-  bagging_fraction: 0.6521211214797689
+  bagging_fraction: 0.9828324388747637
   bagging_freq: 4
-  feature_fraction: 0.5917022549267169
-  learning_rate: 0.005439667429522981
-  max_depth: 12
-  min_child_samples: 84
-  num_leaves: 185
-  reg_alpha: 8.148018307012941e-07
-  reg_lambda: 4.329370014459266e-07
-best_trial_number: 1
-best_value: 0.6193981381251352
-n_trials: 5
+  feature_fraction: 0.5622415222923086
+  learning_rate: 0.1199387469787449
+  max_depth: 3
+  min_child_samples: 80
+  num_leaves: 121
+  reg_alpha: 0.0018427254574054806
+  reg_lambda: 1.44053877542634e-08
+best_trial_number: 75
+best_value: 0.8281078077684517
+n_trials: 100
 random_state: 42
 schema_version: 1
-study_name: lightgbm_fraud_tuning_smoke
+study_name: model_a_tuning
