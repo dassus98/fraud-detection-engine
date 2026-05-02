@@ -46,7 +46,13 @@ repos:
         pass_filenames: false
       - id: pytest-fast
         name: pytest (unit, fast)
-        entry: uv run pytest tests/unit -q --no-cov
+        # `-v` (per-test name printing) keeps stdout active throughout
+        # the ~60 s run so the WSL service does not invoke its 60-second
+        # no-output kill (CLAUDE.md §17, `Wsl/Service/E_UNEXPECTED`).
+        # `-q` would only emit progress dots, which the WSL service
+        # has historically misread as a stalled process. The verbose
+        # form prints ~7 lines/s, far below any silence threshold.
+        entry: uv run pytest tests/unit -v --no-cov --tb=short
         language: system
         types: [python]
         pass_filenames: false
