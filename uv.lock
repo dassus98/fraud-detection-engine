@@ -768,6 +768,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyg-lib" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "redis" },
@@ -834,6 +835,7 @@ requires-dist = [
     { name = "pyarrow", specifier = "==19.0.0" },
     { name = "pydantic", specifier = "==2.10.4" },
     { name = "pydantic-settings", specifier = "==2.7.1" },
+    { name = "pyg-lib", url = "https://data.pyg.org/whl/torch-2.5.0%2Bcpu/pyg_lib-0.4.0%2Bpt25cpu-cp311-cp311-linux_x86_64.whl" },
     { name = "pyright", marker = "extra == 'dev'", specifier = "==1.1.391" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==8.3.4" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = "==0.25.1" },
@@ -2667,6 +2669,23 @@ sdist = { url = "https://files.pythonhosted.org/packages/73/7b/c58a586cd7d9ac66d
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b4/46/93416fdae86d40879714f72956ac14df9c7b76f7d41a4d68aa9f71a0028b/pydantic_settings-2.7.1-py3-none-any.whl", hash = "sha256:590be9e6e24d06db33a4262829edef682500ef008565a969c73d39d5f8bfb3fd", size = 29718, upload-time = "2024-12-31T11:27:43.201Z" },
 ]
+
+[[package]]
+name = "pyg-lib"
+version = "0.4.0+pt25cpu"
+source = { url = "https://data.pyg.org/whl/torch-2.5.0%2Bcpu/pyg_lib-0.4.0%2Bpt25cpu-cp311-cp311-linux_x86_64.whl" }
+wheels = [
+    { url = "https://data.pyg.org/whl/torch-2.5.0%2Bcpu/pyg_lib-0.4.0%2Bpt25cpu-cp311-cp311-linux_x86_64.whl", hash = "sha256:7b13a04951c5cbcc3a52397c642d36849addaba9fbc5e9217eb2527db4dbd565" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pre-commit", marker = "extra == 'dev'" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "pytest-cov", marker = "extra == 'test'" },
+    { name = "triton", marker = "extra == 'triton'" },
+]
+provides-extras = ["dev", "test", "triton"]
 
 [[package]]
 name = "pygments"

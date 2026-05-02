@@ -18,11 +18,17 @@ Sprint 3 prompt 3.4.a adds `FraudNetModel` (Model B): a PyTorch
 entity-embedding network for `card1` / `addr1` / `DeviceInfo`, trained
 with focal loss against the 3.5 % fraud base rate. Diversity model;
 shadow-deployable per CLAUDE.md §3.
+
+Sprint 3 prompt 3.4.b adds `FraudGNNModel` (Model C): a 3-layer
+GraphSAGE network operating over the bipartite transaction-entity
+graph, trained with focal loss + neighbor sampling. Batch-only per
+CLAUDE.md §3 — its outputs feed Model A as features in Sprint 5.
 """
 
 from __future__ import annotations
 
 from fraud_engine.models.baseline import BaselineResult, Variant, train_baseline
+from fraud_engine.models.gnn_model import FraudGNN, FraudGNNModel
 from fraud_engine.models.lightgbm_model import LightGBMFraudModel
 from fraud_engine.models.neural_model import FocalLoss, FraudNet, FraudNetModel
 from fraud_engine.models.tuning import SEARCH_SPACE_KEYS, run_tuning
@@ -30,6 +36,8 @@ from fraud_engine.models.tuning import SEARCH_SPACE_KEYS, run_tuning
 __all__ = [
     "BaselineResult",
     "FocalLoss",
+    "FraudGNN",
+    "FraudGNNModel",
     "FraudNet",
     "FraudNetModel",
     "LightGBMFraudModel",

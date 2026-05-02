@@ -44,10 +44,12 @@ kaggle.json
 !/reports/v_feature_reduction_report.md
 !/reports/model_a_training_report.md
 !/reports/model_b_training_report.md
+!/reports/model_c_training_report.md
 !/reports/figures/
 /reports/figures/*
 !/reports/figures/model_a_latency.png
 !/reports/figures/model_b_training_curves.png
+!/reports/figures/model_c_training_curves.png
 *.joblib
 *.pkl
 *.pt
