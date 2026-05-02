@@ -45,6 +45,7 @@ kaggle.json
 !/reports/model_a_training_report.md
 !/reports/model_b_training_report.md
 !/reports/model_c_training_report.md
+!/reports/model_comparison.md
 !/reports/figures/
 /reports/figures/*
 !/reports/figures/model_a_latency.png
