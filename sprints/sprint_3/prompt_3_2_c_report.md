@@ -173,3 +173,176 @@ Verification passed. Ready for John to commit on `sprint-3/prompt-3-2-c-tier5-pi
 ```
 3.2.c: tier5 build pipeline + TierFiveFeaturesSchema + integration/lineage tests + graph analysis notebook + report
 ```
+
+---
+
+## Audit — sprint-3-complete sweep (2026-05-02)
+
+Re-audit on branch `sprint-3/audit-and-gap-fill` (off `main` at `ad266e5`).
+
+### 1. Files verified
+
+| Artefact | Status | Notes |
+|---|---|---|
+| `scripts/build_features_all_tiers.py` | ✅ present | 12,228 bytes; 12-generator chain |
+| `src/fraud_engine/schemas/features.py` (`TierFiveFeaturesSchema`) | ✅ present | 8 nullable Float columns |
+| `notebooks/05_graph_analysis.ipynb` | ✅ present | 24,813 bytes; 14 cells, 6 code cells executed (rest markdown) |
+| `reports/graph_feature_analysis.md` | ✅ present **but gitignored** | 9,685 bytes; on disk locally but never committed (caught by `git check-ignore`) — fixed in this audit; see §8 |
+| `tests/integration/test_tier5_e2e.py` | ✅ present | 5 tests |
+| `tests/lineage/test_tier5_lineage.py` | ✅ present | 1 test |
+| `sprints/sprint_3/prompt_3_2_c_report.md` | ✅ present | This file |
+| `data/processed/tier5_{train,val,test}.parquet` | ✅ present | (verified earlier — train 414,542 × 782 columns) |
+
+**Audit finding A (real bug; gap-filled):** `reports/graph_feature_analysis.md` matches the `/reports/*` ignore rule and was never committed. The 3.3.d completion report flagged this in passing but the fix wasn't applied retroactively. Without the gitignore exception, anyone cloning the repo gets the data parquets + notebook but NOT the analysis report — exactly the file most relevant to a portfolio reviewer. **Fix applied in this audit** (see §8).
+
+### 2. Loading / build re-verification
+
+```
+$ uv run pytest tests/integration/test_tier5_e2e.py tests/lineage/test_tier5_lineage.py -v --no-cov
+tests/integration/test_tier5_e2e.py::test_t5_pipeline_validates_against_schema PASSED
+tests/integration/test_tier5_e2e.py::test_t5_pipeline_preserves_row_counts PASSED
+tests/integration/test_tier5_e2e.py::test_t5_emits_all_8_graph_columns PASSED
+tests/integration/test_tier5_e2e.py::test_t5_val_auc_sanity_with_soft_warn PASSED  (UserWarning at 0.7876)
+tests/integration/test_tier5_e2e.py::test_t5_shuffled_labels_no_target_leak PASSED
+tests/lineage/test_tier5_lineage.py::test_assert_no_future_leak_on_all_tier5_features PASSED
+================= 6 passed, 2823 warnings in 230.09s (0:03:50) =================
+```
+
+**6/6 pass in 3m50s** (slight increase on original 213s; same machine variance). Soft-warn fires at val_auc=0.7876 on 10K (consistent with full-data 0.7689). Leak gate green. The notebook re-execution + full build script not re-run as part of this audit (12-min wall-time and the artefacts on disk are verified intact via the integration test's pipeline-build round-trip).
+
+### 3. Business logic walkthrough
+
+The 12-generator chain in `_build_pipeline()`:
+
+1. AmountTransformer
+2. TimeFeatureGenerator
+3. EmailDomainFeatureGenerator
+4. MissingIndicatorGenerator
+5. VelocityCounter
+6. HistoricalStats
+7. TargetEncoder
+8. BehavioralDeviation
+9. ColdStartHandler
+10. ExponentialDecayVelocity *(Tier-4)*
+11. **GraphFeatureExtractor** *(Tier-5; the 3.2.c addition)*
+12. NanGroupReducer *(must stay last)*
+
+The script:
+1. Loads the interim cleaned splits.
+2. Builds the pipeline; calls `pipeline.fit_transform(train)` → writes `tier5_train.parquet`.
+3. Calls `pipeline.transform(val)` → writes `tier5_val.parquet`.
+4. Calls `pipeline.transform(test)` → writes `tier5_test.parquet`.
+5. Validates each output against `TierFiveFeaturesSchema` (lazy=True).
+6. Trains a quick LightGBM on (train, val) and logs `tier5_val_auc=0.7689`.
+7. Persists pipeline.joblib + manifest.
+
+### 4. Expected vs realised
+
+| Spec contract | Realised |
+|---|---|
+| Build script extended to T5; val AUC expected 0.93-0.94 | Build green; val AUC **0.7689** ⚠ (gap −0.16 from spec lower bound) |
+| Notebook: degree distribution | Section A — per-entity log-scale histograms ✅ |
+| Notebook: CC size distribution | Section B — log-log + small-tail bar plot ✅ |
+| Notebook: fraud rate by CC size | Section C — bucketed bar plot ✅ |
+| Notebook: visualize 5 largest CCs | Section D — non-giant CCs of sizes [4,4,3,3,3] ✅ |
+| Report: lift + most-predictive graph features | `reports/graph_feature_analysis.md`: TL;DR + 6 sections; `entity_degree_card1` ranks 3rd of 743 ✅ |
+| Verification: pytest e2e + lineage | 6/6 pass ✅ |
+
+The val-AUC gap (0.7689 vs 0.93-0.94) is the same default-hparam regression seen in 3.1.b. **Recovered partially in 3.3.d's tuning to 0.8281** (still under 0.93 but ~+0.06 from the Tier-5 default-hparam baseline).
+
+### 5. Test coverage check
+
+5 e2e tests + 1 lineage test:
+
+- `test_t5_pipeline_validates_against_schema` — pandera lazy=True validates 12-generator output against `TierFiveFeaturesSchema`.
+- `test_t5_pipeline_preserves_row_counts` — `len(out) == len(input)`.
+- `test_t5_emits_all_8_graph_columns` — verifies all 8 graph columns present (1 CC + 4 entity_degree + 1 fraud_neighbor_rate + 1 pagerank + 1 clustering).
+- `test_t5_val_auc_sanity_with_soft_warn` — soft-warn at <0.90 (currently warning), hard-fail at <0.5.
+- `test_t5_shuffled_labels_no_target_leak` — full pipeline with shuffled labels; asserts val AUC < 0.55 on the shuffled run.
+- `test_assert_no_future_leak_on_all_tier5_features` — temporal-safety walk over all 8 graph features (Tier-5 lineage gate).
+
+### 6. Lint / logging / comments check
+
+- **Lint:** ✅ clean.
+- **Logging:** Build script uses `Run` context-manager structlog spans (one parent + per-generator children). The clustering-gate WARN fires correctly during the 414K-row run (logged in original report's verbatim output). Soft-warn UserWarning bubbles to pytest captured output.
+- **Comments:** Build script docstring documents pipeline ordering rationale (especially "GraphFeatureExtractor at position 11; NanGroupReducer last because…"). Schema additions have full docstrings.
+
+### 7. Design rationale
+
+#### Justifications
+
+- **Why a single canonical build script (not parallel by tier):** maintaining `build_features_tier1_2_3_4.py` alongside `build_features_all_tiers.py` would invite ordering drift. Sprint 3 ships `all_tiers` as the canonical path; `tier1_2_3_4.py` is removed.
+- **Why `TierFiveFeaturesSchema` columns are nullable:** val/test rows legitimately produce NaN for txn-level features (CC size, pagerank, clustering — graph membership is a training-time concept) AND for cold-start entities (degree, fraud_neighbor_rate when entity isn't in train graph). Pandera `nullable=True` with `Check.greater_than_or_equal_to(0)` (or appropriate range) is the right combination.
+- **Why a notebook + a separate analysis report:** notebook is reviewable / re-executable; report is the markdown summary that GitHub renders inline. Hiring committees read the markdown report; engineers re-run the notebook.
+- **Why a 50-row temporal-safety walk in lineage test:** Tier-5 features query frozen training-graph state, so recomputing on a past slice queries the same fitted state and returns the same value. The integration-level `assert_no_future_leak` is the contract confirmation; unit-level OOF tests in 3.2.b are where leak risk surfaced.
+
+#### Consequences
+
+| Dimension | Positive | Negative |
+|---|---|---|
+| Pipeline composability | 12-generator chain composes cleanly via `FeaturePipeline` | Wall-time 12 min on full data — long for iteration |
+| Feature count | 782 columns (+8 graph) | Default LightGBM struggles to navigate the expanded space; AUC −0.024 vs Tier-4 |
+| Schema | `TierFiveFeaturesSchema` enforces presence + types of graph cols | Schema validation cost ~5s per parquet at 414K × 782 |
+| Notebook | Executed outputs land in the .ipynb so GitHub renders the plots | Notebook stale-output risk if rebuild-and-execute discipline lapses (see CLAUDE.md §16) |
+| Analysis report | Concrete numbers + business-readable narrative | Was gitignored until this audit (gap-filled) |
+
+#### Alternatives considered and rejected
+
+1. **Keep `build_features_tier1_2_3_4.py` alongside the new script.** Rejected: ordering drift risk; one canonical script is cleaner.
+2. **`TierFiveFeaturesSchema` with `nullable=False` + sentinel values** (e.g. -1 for "no graph membership"). Rejected: LightGBM handles NaN as signal natively; sentinel injection would force the model to learn that -1 means "unknown" rather than treating it as missing.
+3. **Generate the notebook on-the-fly per build run.** Rejected: notebook is a portfolio artefact, should be reproducibly executable from a builder script (`scripts/_build_graph_analysis_notebook.py`) — not regenerated as a side-effect.
+4. **Drop `connected_component_size` since it's near-constant on production data.** Rejected: schema enforces presence; column is informative on smaller graph segments and on different datasets; LightGBM correctly assigns near-zero gain to constants without harm.
+
+#### Trade-offs
+
+- **`connected_component_size` is effectively constant on production data** (414,510 of 414,542 train rows in the giant CC of size 428,656). LightGBM ignores it (zero gain importance). Trade-off: column preserved for schema stability + utility on smaller datasets vs the wasted feature-budget slot.
+- **`clustering_coefficient` falls back to constant 0.0** because the gate at 50K nodes fires on production. The column is preserved (schema stability + utility on smaller subgraphs); the signal is sacrificed.
+- **Notebook execution cost** is ~12 min per run; deferred re-execution in this audit (the 6-cell-executed state from the original commit is the canonical content).
+- **Soft-warn UserWarning at 0.90** vs hard-fail at 0.5: balance between flagging real regressions and not breaking CI on noisy 10K samples.
+
+#### Potential issues to arise
+
+- **Notebook stale-output risk.** If the underlying parquets / model importance values drift, the executed cells lock to the build-time state. Fixed by `make notebooks` discipline (rebuilds + re-executes; CLAUDE.md §16 enforces).
+- **Two near-constant columns** (CC size and clustering coefficient) wasting feature budget at production scale. Sprint 4 candidate: drop them or replace with sampled/approximate variants.
+- **The 12-min build wall** is fine for offline rebuilds but problematic if Sprint 5 wants daily/hourly retrains. Mitigation: most of the cost is the 5-fold OOF graph rebuild — moving to a pre-fitted-graph injection pattern would 5× this.
+- **Analysis report gitignore bug.** Already gap-filled here. But the systemic issue — `/reports/*` deny-list with explicit allow-list — invites future "I added a report file that doesn't show up after PR" recurrence. Mitigation: a pre-commit hook that warns on untracked files in `reports/` would catch this category. Sprint 4 candidate.
+
+#### Scalability
+
+- **Build wall-time:** 12 min on 414K rows. Linear-ish; estimated 2 hours at 4M rows. Beyond that, the 5-fold OOF graph rebuild becomes the bottleneck.
+- **Schema validation:** ~5s per parquet at 414K × 782. Acceptable.
+- **Disk:** tier5_train.parquet is materially larger than tier4_train.parquet (~+8 columns × 414K × 8 bytes ≈ 26 MB raw; ~3 MB after parquet compression).
+- **Notebook execution:** 12 min wall (matches build wall — notebook re-runs the GraphFeatureExtractor against the parquets).
+
+#### Reproducibility
+
+- **Pipeline persistence:** `tier5_pipeline.joblib` carries the fitted `GraphFeatureExtractor` (with embedded `_full_train_graph_`).
+- **Manifest:** `feature_manifest.json` records run-id, schema version, generator order, content hashes.
+- **Notebook:** executed outputs serialised in the .ipynb; `make notebooks` regenerates deterministically.
+- **Analysis report:** gap-filled to be tracked; future content drift caught by CI's notebook-rebuild discipline.
+
+### 8. Gap-fills applied
+
+**1. `reports/graph_feature_analysis.md` gitignore exception added.**
+
+`.gitignore` previously had `/reports/*` (deny) followed by explicit allow-list entries. `graph_feature_analysis.md` was missing from the allow-list, meaning the file existed on disk but was never tracked by git. Anyone cloning the repo gets the parquets + notebook but NOT the analysis report.
+
+```diff
+ !/reports/v_feature_reduction_report.md
++!/reports/graph_feature_analysis.md
+ !/reports/model_a_training_report.md
+```
+
+Verified: `git check-ignore -v reports/graph_feature_analysis.md` now returns the **allow** rule (line 45 with `!` prefix). The file will be `git add`-able by John when he commits the audit-and-gap-fill batch.
+
+### 9. Open follow-ons / Sprint 4 candidates
+
+- **Pre-commit hook to warn on untracked files in `reports/`** — would have caught the gitignore bug at commit time.
+- **Drop or approximate the near-constant columns** (CC size + clustering coefficient on production data) to recover feature budget.
+- **Pre-fitted-graph injection pattern** to avoid 5-fold rebuild cost during `fit_transform`.
+- **Notebook execution caching** so the build can skip re-executing if the parquets haven't changed.
+- **Edge-list parquet export** for Sprint 5 serving stack.
+
+### Audit conclusion
+
+**3.2.c is spec-complete-with-documented-gap and audit-clean** with **one real bug fixed** (analysis report gitignore). Build script + schema + notebook + analysis report all on disk and consistent with the original report. 6/6 e2e + lineage tests pass. The val-AUC gap (0.7689 vs 0.93-0.94 spec) is the same default-hparam regression as 3.1.b; recovered partially in 3.3.d.

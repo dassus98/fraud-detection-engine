@@ -42,6 +42,7 @@ kaggle.json
 /reports/*
 !/reports/sprint1_eda_summary.md
 !/reports/v_feature_reduction_report.md
+!/reports/graph_feature_analysis.md
 !/reports/model_a_training_report.md
 !/reports/model_b_training_report.md
 !/reports/model_c_training_report.md

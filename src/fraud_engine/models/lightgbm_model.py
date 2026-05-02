@@ -48,14 +48,21 @@ Trade-offs considered:
       Joblib pickles the booster cleanly; manifest sidecar is
       `cat`-able and `jq`-queryable for audit.
     - **Manifest contains both `schema_hash` and `content_hash`.**
-      Schema hash = SHA-256 of `{col: str(dtype)}` truncated to 16
-      chars (mirrors `data/lineage.py:_schema_fingerprint`); lets a
-      downstream consumer detect "the input frame I'm about to
-      `predict_proba` doesn't match what was used at fit time."
-      Content hash = full SHA-256 of joblib bytes (mirrors
-      `models/baseline.py:_sha256_joblib`); lets ops detect
-      bit-level drift across re-saves of an ostensibly identical
-      model.
+      Schema hash = SHA-256 of the alphabetised feature-name list,
+      truncated to 16 chars (64 bits); lets a downstream consumer
+      detect "the input frame I'm about to `predict_proba` is
+      missing a required column or has unexpected ones." We
+      deliberately do NOT capture per-column dtype info — the
+      canonical dtype-aware fingerprint at
+      `data/lineage.py:_fingerprint_dataframe` requires holding
+      the original DataFrame, which would couple the booster to
+      its training frame's memory. Production drift in this
+      project is overwhelmingly schema-shape drift (added /
+      removed cols), not dtype drift on stable cols, so the
+      column-set hash is sufficient. Content hash = full
+      SHA-256 of the on-disk joblib bytes; lets ops detect
+      bit-level drift across re-saves of an ostensibly
+      identical model.
     - **No content-hash prefix in filename.** The Sprint 1 baseline
       embeds the hash in the filename; we keep the filename stable
       (`lightgbm_model.joblib`) and surface the hash via the
@@ -68,15 +75,18 @@ Trade-offs considered:
 Cross-references:
     - `src/fraud_engine/features/pipeline.py:175-236` — save/load template
     - `src/fraud_engine/features/tier5_graph.py:460-513` — save/load + manifest
-    - `src/fraud_engine/data/lineage.py:86-89` — schema-fingerprint pattern
-    - `src/fraud_engine/models/baseline.py:428-440` — content-hash pattern
+    - `src/fraud_engine/data/lineage.py:_fingerprint_dataframe` — canonical
+      dtype-aware schema fingerprint (used by `lineage_step`; not used
+      here for the reason noted in trade-off #4 above)
+    - `src/fraud_engine/models/baseline.py:_sha256_joblib` — same
+      content-hash pattern used here (read bytes of the joblib payload
+      and digest)
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import tempfile
 from pathlib import Path
 from typing import Any, Final, Self
 
@@ -117,38 +127,6 @@ _VALID_IMPORTANCE_TYPES: Final[frozenset[str]] = frozenset({"gain", "split"})
 # Number of class probability columns returned by `predict_proba`.
 # 2 = (P[class=0], P[class=1]) — sklearn convention.
 _N_CLASS_PROBS: Final[int] = 2
-
-
-def _schema_fingerprint(df: pd.DataFrame) -> str:
-    """SHA-256 of `{col: str(dtype)}` (alphabetised), hex-truncated.
-
-    Mirrors `data/lineage.py:_schema_fingerprint`. The fingerprint is
-    deterministic across runs given the same column names + dtypes,
-    and changes when EITHER drifts. Truncated to 16 hex chars (64 bits
-    of entropy) — sufficient for collision-resistant fingerprinting at
-    the project's scale.
-    """
-    schema_dict = {col: str(df[col].dtype) for col in sorted(df.columns)}
-    schema_str = json.dumps(schema_dict, separators=(",", ":"))
-    full_hash = hashlib.sha256(schema_str.encode("utf-8")).hexdigest()
-    return full_hash[:_SCHEMA_FINGERPRINT_HEX_CHARS]
-
-
-def _sha256_joblib(obj: Any) -> str:
-    """Return a deterministic SHA-256 of `obj` as serialised by joblib.
-
-    Mirrors `models/baseline.py:_sha256_joblib`. Using a temp file
-    keeps the implementation dependency-free: joblib writes to a
-    path, we read the bytes back, and hash. Returns the full
-    64-character hex digest.
-    """
-    with tempfile.NamedTemporaryFile(suffix=".joblib", delete=False) as handle:
-        joblib.dump(obj, handle.name)
-        tmp_path = Path(handle.name)
-    try:
-        return hashlib.sha256(tmp_path.read_bytes()).hexdigest()
-    finally:
-        tmp_path.unlink(missing_ok=True)
 
 
 class LightGBMFraudModel:
@@ -539,11 +517,11 @@ class LightGBMFraudModel:
             or self.scale_pos_weight_ is None
         ):
             raise AttributeError("LightGBMFraudModel._build_manifest called before fit")
-        # Schema fingerprint of the training feature frame is captured
-        # from feature_names + dtype info recorded at fit time. We
-        # don't carry the original DataFrame around (memory cost), so
-        # we hash just the column names. Downstream callers can
-        # cross-check by hashing their input columns the same way.
+        # Schema fingerprint hashes the alphabetised feature-name list
+        # only — see trade-off #4 in the module docstring for why we
+        # do NOT capture per-column dtype here. Downstream consumers
+        # cross-check by hashing their input frame's column list with
+        # the same recipe (sorted JSON dump, sha256, first 16 hex).
         schema_str = json.dumps(sorted(self.feature_names_), separators=(",", ":"))
         schema_hash = hashlib.sha256(schema_str.encode("utf-8")).hexdigest()[
             :_SCHEMA_FINGERPRINT_HEX_CHARS

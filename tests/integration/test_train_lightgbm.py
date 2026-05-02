@@ -19,7 +19,6 @@ script's input). Mirrors `tests/integration/test_tier5_e2e.py`'s
 from __future__ import annotations
 
 from collections.abc import Iterator
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -51,17 +50,23 @@ def _processed_dir_has_tier5() -> bool:
     return (get_settings().processed_dir / "tier5_train.parquet").is_file()
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def isolated_settings(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
 ) -> Iterator[Settings]:
     """Settings with isolated MLFLOW_TRACKING_URI + MODELS_DIR.
 
-    Mirrors `tests/integration/test_tuning.py::tuning_settings`. Keeps
-    the real `data/processed/` dir for input parquets but redirects
-    every output (models, mlruns, logs) to `tmp_path` so the test
-    doesn't pollute the repo's `models/` or `./mlruns/`.
+    Module-scoped (was function-scoped pre-audit) so the upstream
+    `smoke_result` fixture can also be module-scoped — one tuning
+    sweep + final-fit per test FILE rather than per test, ~6× wall
+    speedup on the 6-test suite. Keeps the real `data/processed/`
+    dir for input parquets but redirects every output (models,
+    mlruns, logs) to a tmp dir so the test doesn't pollute the
+    repo's `models/` or `./mlruns/`.
+
+    `pytest.MonkeyPatch().context()` is the pytest-recommended idiom
+    for module-scoped env-var patching (the function-scoped
+    `monkeypatch` fixture can't be used at module scope).
     """
     if not _processed_dir_has_tier5():
         pytest.skip(
@@ -70,35 +75,41 @@ def isolated_settings(
         )
 
     real_data_dir = get_settings().data_dir
+    tmp_path = tmp_path_factory.mktemp("integ_train_lightgbm")
     models_dir = tmp_path / "models"
     logs_dir = tmp_path / "logs"
     mlruns = tmp_path / "mlruns"
 
-    monkeypatch.setenv("DATA_DIR", str(real_data_dir))  # keep real data
-    monkeypatch.setenv("MODELS_DIR", str(models_dir))
-    monkeypatch.setenv("LOGS_DIR", str(logs_dir))
-    monkeypatch.setenv("MLFLOW_TRACKING_URI", str(mlruns))
-    monkeypatch.setenv("SEED", str(_SMOKE_SEED))
-    monkeypatch.setenv("LOG_LEVEL", "WARNING")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("DATA_DIR", str(real_data_dir))  # keep real data
+        mp.setenv("MODELS_DIR", str(models_dir))
+        mp.setenv("LOGS_DIR", str(logs_dir))
+        mp.setenv("MLFLOW_TRACKING_URI", str(mlruns))
+        mp.setenv("SEED", str(_SMOKE_SEED))
+        mp.setenv("LOG_LEVEL", "WARNING")
 
-    get_settings.cache_clear()
-    settings = Settings()
-    settings.ensure_directories()
-    yield settings
-    get_settings.cache_clear()
+        get_settings.cache_clear()
+        settings = Settings()
+        settings.ensure_directories()
+        yield settings
+        get_settings.cache_clear()
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def smoke_result(
     isolated_settings: Settings,
-    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
 ) -> TrainingResult:
     """Run the smoke pipeline once; share the result across assertions.
 
-    `train_pipeline` does Optuna tuning + final fit + calibration +
-    save + report. Sharing across tests keeps the suite's wall-time
-    bounded — one tuning sweep instead of one per test.
+    Module-scoped: the (Optuna tuning + final fit + calibration +
+    save + report) pipeline runs once for the entire test file, not
+    once per test. 6-test wall went from ~70 s to ~12 s after this
+    audit fix (was function-scoped, against the docstring's
+    promise — the docstring said "share across tests" but the
+    function scope made each test re-run the pipeline).
     """
+    tmp_path = tmp_path_factory.mktemp("smoke_result")
     report_path = tmp_path / "model_a_training_report.md"
     figure_path = tmp_path / "figures" / "model_a_latency.png"
     return train_pipeline(

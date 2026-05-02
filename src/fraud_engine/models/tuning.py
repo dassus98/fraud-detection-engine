@@ -28,13 +28,25 @@ Trade-offs considered:
       trials. Cost: TPE is sequential (no parallel-trial speedup
       without a shared storage backend). Acceptable for 100 trials at
       ~1-3 s each.
-    - **MedianPruner with `n_startup_trials=5`.** Early trials run to
-      completion (so the pruner has comparison baselines); later
-      trials whose intermediate val AUC drops below the median of
-      completed trials at the same step get killed. Saves wall-time
-      on hopeless trials. Trade-off: aggressive pruning can prune a
-      slow-starting good trial; `n_startup_trials=5` + the modest
-      n_warmup_steps=10 default give the pruner a conservative bias.
+    - **MedianPruner with `n_startup_trials=5` is configured but
+      currently inert.** Optuna pruners only act when the objective
+      calls `trial.report(value, step)` to publish intermediate
+      progress; this objective reports a single final val AUC per
+      trial and never calls `trial.report`, so the pruner has
+      nothing to compare and every trial runs to completion. The
+      configuration is preserved as the design seam: full
+      activation needs a per-boosting-iteration callback that
+      pushes the rolling val AUC into `trial.report` and raises
+      `optuna.TrialPruned` on `trial.should_prune()`, which
+      requires either a `callbacks` kwarg on
+      `LightGBMFraudModel.fit` (a cross-module change touching
+      3.3.a) or an in-objective reimplementation of training that
+      bypasses the wrapper. With the 100-trial sweep wall-budget
+      at ~30-60 s per trial, pruning would save an estimated
+      25-50 % of total time — a Sprint 4 follow-on if the
+      sweep cadence becomes a bottleneck. Documented inline at
+      the `MedianPruner(...)` construction site so future readers
+      don't waste time wondering why pruning never fires.
     - **In-memory storage.** No SQLite file, no parallel workers, no
       study resume. Sufficient for the 100-trial sweep (~5-10 min on
       Tier-5 features). 3.3.d may switch to SQLite if the sweep grows
@@ -314,6 +326,10 @@ def run_tuning(  # noqa: PLR0913 — eight explicit knobs match the spec contrac
     y_val_arr = np.asarray(y_val).ravel()
 
     sampler = TPESampler(seed=effective_random_state)
+    # NOTE: `MedianPruner` is configured here for design completeness
+    # but is currently inert — see trade-off #2 in the module
+    # docstring. Pruning will only activate once the objective starts
+    # calling `trial.report(value, step)` per boosting iteration.
     pruner = MedianPruner(n_startup_trials=_MEDIAN_PRUNER_STARTUP_TRIALS)
     study = optuna.create_study(
         study_name=study_name,

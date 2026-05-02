@@ -465,10 +465,13 @@ class FraudNet(nn.Module):
 def _schema_fingerprint(columns: list[str]) -> str:
     """SHA-256 of a sorted column list, hex-truncated.
 
-    Mirrors `lightgbm_model._schema_fingerprint` modulo the dtype
-    component — neural-model schemas are pinned to the column-list
-    surface (numeric features go through StandardScaler before the
-    model sees them, so per-column dtype is always float32).
+    Same column-name-only recipe used inline by
+    `LightGBMFraudModel._build_manifest`. (The canonical
+    dtype-aware fingerprint at `data.lineage._fingerprint_dataframe`
+    is deliberately not used here — neural-model numeric features
+    go through StandardScaler before the model sees them, so
+    per-column dtype is always float32 by construction and dtype
+    drift is impossible.)
     """
     schema_str = json.dumps(sorted(columns), separators=(",", ":"))
     return hashlib.sha256(schema_str.encode("utf-8")).hexdigest()[:_SCHEMA_FINGERPRINT_HEX_CHARS]
