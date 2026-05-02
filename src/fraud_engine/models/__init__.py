@@ -12,18 +12,26 @@ the hyperparameter-tuning and economic-cost evaluator stages consume.
 Sprint 3 prompt 3.3.b adds `run_tuning`, an Optuna-driven hyperparameter
 sweep over `LightGBMFraudModel`. Each trial is logged to MLflow as a
 nested run; best params land in `configs/model_best_params.yaml` for
-downstream consumers. Subsequent prompts add the entity-embedding
-neural network and the PyG graph model.
+downstream consumers.
+
+Sprint 3 prompt 3.4.a adds `FraudNetModel` (Model B): a PyTorch
+entity-embedding network for `card1` / `addr1` / `DeviceInfo`, trained
+with focal loss against the 3.5 % fraud base rate. Diversity model;
+shadow-deployable per CLAUDE.md §3.
 """
 
 from __future__ import annotations
 
 from fraud_engine.models.baseline import BaselineResult, Variant, train_baseline
 from fraud_engine.models.lightgbm_model import LightGBMFraudModel
+from fraud_engine.models.neural_model import FocalLoss, FraudNet, FraudNetModel
 from fraud_engine.models.tuning import SEARCH_SPACE_KEYS, run_tuning
 
 __all__ = [
     "BaselineResult",
+    "FocalLoss",
+    "FraudNet",
+    "FraudNetModel",
     "LightGBMFraudModel",
     "SEARCH_SPACE_KEYS",
     "Variant",
