@@ -197,3 +197,165 @@ Verification passed. Ready for John to commit on `sprint-3/prompt-3-2-b-tier5-gr
 ```
 3.2.b: GraphFeatureExtractor (Tier-5 per-txn graph features with OOF-safe fraud neighbour rate)
 ```
+
+---
+
+## Audit — sprint-3-complete sweep (2026-05-02)
+
+Re-audit on branch `sprint-3/audit-and-gap-fill` (off `main` at `ad266e5`).
+
+### 1. Files verified
+
+| Artefact | Status | Notes |
+|---|---|---|
+| `src/fraud_engine/features/tier5_graph.py` (`GraphFeatureExtractor` lines 543-1229) | ✅ present | The class is the second half of the file; lives alongside `TransactionEntityGraph` (3.2.a) for tight coupling |
+| `tests/unit/test_tier5_graph_features.py` | ✅ present | 21 KB / ~590 LOC; 22 tests across 5 classes |
+| `tests/integration/test_tier5_performance.py` | ✅ present | 7.2 KB; 2 tests (10 K end-to-end + full-data `<20 min`) |
+| `src/fraud_engine/features/__init__.py` re-export | ✅ present | `GraphFeatureExtractor` exported alongside `TransactionEntityGraph` |
+| `sprints/sprint_3/prompt_3_2_b_report.md` | ✅ present | This file |
+
+### 2. Loading / build re-verification
+
+```
+$ uv run pytest tests/unit/test_tier5_graph_features.py -v --no-cov
+======================= 22 passed, 14 warnings in 1.63s ========================
+```
+
+Unit tests **22/22 pass in 1.63s**. Integration tests not re-run as part of this prompt's audit (they're covered in the broader `make test-integration` sweep done in the sprint review — 55 passed in 10m42s — and re-running the full-data 20-min benchmark would burn ~1 minute for no new signal).
+
+### 3. Business logic walkthrough
+
+**`GraphFeatureExtractor`** is a `BaseFeatureGenerator` subclass that consumes a `TransactionEntityGraph` (3.2.a) plus the original training frame, and emits 8 per-row columns:
+
+1. **`fit_transform`** — for each row in `df`:
+   1. Build the full-train `TransactionEntityGraph`. Compute `connected_component_size` (per-CC size lookup), `entity_degree_X` (graph degree of each entity column's value), `pagerank_score` (one full pagerank pass; `max_iter=20, tol=1e-3`), `clustering_coefficient` (gated above `clustering_node_limit=50_000` to constant 0.0 with WARN).
+   2. Run a 5-fold StratifiedKFold loop. For each fold, rebuild a fold-train graph from `df.iloc[other_idx]`; for every `oof_idx` row, walk fold-train graph neighbours via the row's seen entities, and compute `fraud_neighbor_rate = sum(neighbour_isFraud) / sum(degrees)`. NaN if denom is 0 or no entity is seen.
+
+2. **`transform(val)`** — read-only against the persisted full-train graph + saved `_full_train_pagerank_`, `_full_train_cc_size_`, etc. Emit:
+   - CC size / pagerank / clustering → NaN (val txns aren't graph nodes by temporal-safety contract).
+   - entity_degree → degree of val row's entity in train graph if seen, else NaN.
+   - fraud_neighbor_rate → walk train neighbours; NaN if no entity seen / denom 0.
+
+The OOF discipline mirrors `TargetEncoder` (Sprint 2.2.d): label-dependent feature → KFold loop with per-fold rebuild. Other 4 features are label-independent and computed once.
+
+### 4. Expected vs realised
+
+| Spec contract | Realised |
+|---|---|
+| `connected_component_size` | float; full-train CC size for training rows; NaN for val/test ✅ |
+| `entity_degree_{entity_type}` per entity | 4 cols (card1, addr1, DeviceInfo, P_emaildomain); NaN on NaN/unseen ✅ |
+| `fraud_neighbor_rate` (OOF-safe) | StratifiedKFold(5); per-fold graph rebuild + walk; mirrors TargetEncoder ✅ |
+| `pagerank_score` | networkx pagerank with simplified params (max_iter=20, tol=1e-3); fallback to uniform 1/N on convergence failure ✅ |
+| `clustering_coefficient` | `nx.bipartite.clustering(mode='dot')` on small graphs; gated above 50K nodes (constant 0.0 + WARN) ✅ |
+| Runtime budget < 20 min on full data | **32.9 s actual** (~36× headroom) ✅ |
+| Synthetic-graph tests (hand-computed) | 7 tests in `TestSyntheticFeatures` (4-cycle ring values verified) ✅ |
+| Temporal-safety tests | 5 tests in `TestColdStartContract` ✅ |
+
+**No spec gaps.**
+
+### 5. Test coverage check
+
+22 unit tests + 2 integration tests:
+
+- `TestSyntheticFeatures` (7) — 4-cycle ring, disconnected components, isolated singleton, symmetric pagerank, 3-shared-card patterns; hand-computed values (e.g. clustering=1.0 on the 4-cycle is asserted to 1e-9).
+- `TestColdStartContract` (5) — val txns produce correct NaNs; cold-start with denom-0; one-seen-entity rate.
+- `TestOOFContract` (4) — fit_transform OOF differs from fit().transform() (the leak case); seed-stable; shuffled-target signal collapse; n_splits<2 raises.
+- `TestErrorHandling` (4) — missing entity column / target column / pre-fit transform / transform without target.
+- `TestGetFeatureNames` (2) — default 8-column list + configurable entity-column count.
+- `TestEndToEnd10k` (1, integration) — 10K stratified sample with temporal split + fit_transform → transform round-trip.
+- `TestPerformance` (1, integration, slow) — full 414K train; HARD gate < 20 min; realised 32.9 s.
+
+### 6. Lint / logging / comments check
+
+- **Lint:** ✅ ruff clean.
+- **Logging:** Uses structlog at the right places — pagerank-failure WARN; clustering-gate WARN at fit-time; per-fold INFO during OOF rebuilds. NOT in the inner loops (correct — would dominate budget).
+- **Comments:** 7-trade-off block in class docstring; per-method docstrings; inline rationales at non-obvious branches (e.g. NaN-handling, denom-0 fallback). Drifted slightly on pagerank defaults — fixed in this audit (see §8 below).
+
+### 7. Design rationale
+
+#### Justifications
+
+- **Why graph features at all:** Tier 1-4 describe each transaction in isolation. They cannot represent the **shared-infrastructure** signal that's the signature of organised fraud (one device → many cards). Graph features expose that structure to LightGBM. Stripe / Adyen / Klarna all run a graph layer in production.
+- **Why these 5 features specifically:** they cover three orthogonal axes — (a) **scope** (`connected_component_size` = ring size); (b) **hubness** (`entity_degree`, `pagerank_score` = how central is this txn / its entities); (c) **density** (`fraud_neighbor_rate`, `clustering_coefficient` = how concentrated is fraud / closure in this neighbourhood). Each axis adds a different LightGBM split surface.
+- **Why OOF only on `fraud_neighbor_rate`:** of the 5, only this one is a function of `isFraud`. CC size, entity degree, pagerank, and clustering are PURELY structural — they cannot leak target. So they get the cheaper full-train computation; only the label-dependent one pays the 5× OOF cost.
+- **Why simplified pagerank (`max_iter=20, tol=1e-3`):** LightGBM splits on relative ordering of pagerank values, which stabilises long before per-node estimates hit 1e-6. Direct measurement during 3.2.b development: `max_iter=50` produces identical column values to 6 decimal places on a 10K synthetic graph. The simpler config saves ~3 min on full data.
+- **Why constant-0.0 clustering gate above 50K nodes:** `nx.bipartite.clustering(mode='dot')` is `O(V · |N²(u)|)`. On a hub-heavy graph (P_emaildomain has 159K-degree nodes), the 2-hop walk pushes work into billions of operations and the test runs >22 minutes. Spec explicitly authorised the "last resort" fallback; we adopt it as default with a WARN.
+
+#### Consequences
+
+| Dimension | Positive | Negative |
+|---|---|---|
+| Feature count | 8 columns of structurally-informed signal | strong inter-correlation within graph features (all derived from the same graph); LightGBM's split-finding may fragment |
+| OOF safety | `fraud_neighbor_rate` is leak-free by construction | 5× graph rebuild cost in `fit_transform` (5 folds × ~4 s each ≈ 20 s) |
+| Pagerank | Simplified config saves ~3 min with no measurable accuracy loss | The pagerank values themselves are coarser; if a future use-case wants production-grade ranking (rather than LightGBM splits), would need to re-tune |
+| Clustering gate | Avoids the 22-min full-graph clustering compute; production stays under budget | The column emits constant 0.0 above the gate — the **clustering signal is effectively unavailable at production scale**. The synthetic tests still exercise the real algorithm; production loses the column's discrimination |
+| Runtime | 32.9 s on full data ≪ 20 min budget — comfortable headroom | The 5 OOF folds + 6 graph rebuilds total may push memory peak higher than 3.2.a's 0.461 GB; not measured separately |
+
+#### Alternatives considered and rejected
+
+1. **Compute clustering on a sampled subgraph** to recover signal at production scale. Rejected for 3.2.b: increases test surface; the spec's "last resort" fallback was explicit. Sprint 4 candidate.
+2. **Unipartite projection clustering** (`bipartite.projected_graph` then `nx.clustering`). Rejected: projection at 414K txn nodes could explode to a dense N×N graph; memory infeasible.
+3. **Compute pagerank on the unipartite projection.** Rejected: projection cost dwarfs the pagerank cost; bipartite pagerank on the original graph is cheaper and equally informative for LightGBM.
+4. **Full pagerank precision (`max_iter=100, tol=1e-6`).** Rejected after benchmark: cost ~3× higher for no measurable LightGBM accuracy gain.
+5. **Compute `fraud_neighbor_rate` non-OOF (full-train).** Rejected: would leak target — every training row's `fraud_neighbor_rate` would include its own `isFraud` via 1-hop walks back to neighbours that share entities. Same risk class as `TargetEncoder`.
+6. **NaN-impute graph features** rather than emit NaN to LightGBM. Rejected: LightGBM handles missingness as signal; aggressive imputation would inject false confidence in cold-start val/test cases.
+7. **Build the graph once and share across all features** (current architecture builds it inside `fit_transform`). Acceptable trade-off; sharing across multiple feature generators is a Sprint 4+ optimisation when there's a second graph-consuming generator.
+
+#### Trade-offs
+
+The class docstring documents 7 trade-offs (build internally vs accept pre-built graph; structural features computed on full-train; OOF only on fraud_neighbor_rate; bipartite clustering vs unipartite projection; pagerank simplified per spec; cold-start val/test policy; persistence rides on FeaturePipeline). All 7 are realised and tested.
+
+#### Potential issues to arise
+
+- **Pagerank convergence failure** falls back to uniform 1/N with a WARN. This is correct fallback semantics but downstream features receive constant values for that run — the WARN is the only signal. Currently it doesn't fire on IEEE-CIS but could on differently-shaped graphs. Sprint-5 monitoring should alarm on the WARN frequency.
+- **Clustering gate at 50K nodes** is a hard-coded threshold. On a 60K-node graph the gate fires; on a 49K-node graph it doesn't. The boundary is somewhat arbitrary (chosen empirically via benchmark). A future iteration could implement adaptive gating or sampling; the gate value is constructor-overridable for experiments.
+- **The 414K IEEE-CIS train graph is one giant CC** (max CC size = 428,656; only a tiny fringe of singletons). The CC-size signal is nearly binary (giant-CC vs orphan) rather than fine-grained. Mitigation: this matches reality (real fraud graphs at scale are mostly one giant blob); the orphan-fraction signal is still discriminative.
+- **Maximum entity_degree on P_emaildomain = 159,712** (~39% of train). This hub-of-hubs is what drives the clustering gate's necessity; if a future entity column has an even bigger hub, the gate's threshold may need adjustment.
+
+#### Scalability
+
+- **fit_transform wall-clock at 414K rows: 32.9 s** (full pipeline including 5-fold OOF + full-train pagerank + clustering gate). Linear-ish in row count for the structural features; quadratic-ish for clustering before the gate kicks in.
+- **transform wall-clock for cold-start val:** ~few ms per row (lookup-only against persisted state). Sprint-5 serving compatible.
+- **Memory peak:** not measured separately, but 6 graph rebuilds × ~0.5 GB per the 3.2.a benchmark = ~3 GB peak during fit_transform (graphs reclaimed after each fold). Well under the 8 GB ceiling.
+- **Disk:** the fitted extractor pickles via joblib alongside `FeaturePipeline`; the embedded `_full_train_graph_` is the dominant size.
+
+#### Reproducibility
+
+- **OOF folds deterministic:** `StratifiedKFold(n_splits=5, shuffle=True, random_state=42)`. Re-running `fit_transform` produces identical OOF outputs.
+- **Pagerank deterministic per scipy/networkx version:** power iteration is deterministic for a fixed initial distribution (uniform); networkx uses uniform.
+- **Clustering deterministic:** Latapy `mode='dot'` is a deterministic computation per node.
+- **Entity-degree deterministic:** `graph.degree(node)` is deterministic.
+- **Pickleable:** the entire fitted extractor (with embedded graph + per-row caches) round-trips cleanly via joblib.
+
+### 8. Gap-fills applied
+
+**Docstring drift fix.** Trade-off #5 in `GraphFeatureExtractor.__doc__` previously said "We default to `max_iter=50, tol=1e-4`" — but the actual `_DEFAULT_PAGERANK_MAX_ITER` and `_DEFAULT_PAGERANK_TOL` constants are 20 and 1e-3 respectively (the further-tightened values mentioned in the original report's "Surprising findings"). The original report acknowledged the change but the docstring was never updated — a small documentation bug.
+
+**Fix applied** to `src/fraud_engine/features/tier5_graph.py`:
+
+```diff
+-           We default to `max_iter=50`, `tol=1e-4` — converges in
+-           <60 s on full data with negligible LightGBM-input
+-           accuracy loss.
++           We default to `max_iter=20`, `tol=1e-3` (the spec's
++           "last resort" fallback adopted as the default) —
++           converges in well under 60 s on full data with no
++           measurable LightGBM-input accuracy loss (LightGBM
++           splits on relative ordering of pagerank values, which
++           stabilises long before per-node estimates hit 1e-6
++           precision).
+```
+
+Lint clean post-fix; 22/22 tests still pass.
+
+### 9. Open follow-ons / Sprint 4 candidates
+
+- **Sampled / capped clustering** to recover signal at production scale. Approximate `|N²(u)|` via random sampling of N(u); preserves discrimination, fits budget.
+- **Adaptive clustering gate** based on observed graph density rather than hard-coded 50K node count.
+- **Shared graph across feature generators.** When (if) a second graph-consuming generator lands, factor the build out as a fitted dependency injected into both.
+- **Streaming graph + incremental features** for Sprint 5 real-time scoring.
+- **Pagerank monitoring alarm** on convergence-failure WARN frequency.
+
+### Audit conclusion
+
+**3.2.b is spec-complete and audit-clean** with one small gap-fill applied (docstring drift on pagerank defaults; cosmetic). 22/22 unit tests pass; full-data benchmark at 32.9 s is ~36× under the 20-min budget. The 5-feature surface is correctly implemented with OOF discipline only where label-dependent. The clustering gate is a documented production-scale fallback that the spec explicitly authorised.

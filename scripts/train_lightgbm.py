@@ -55,7 +55,7 @@ from __future__ import annotations
 import dataclasses
 import time
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import click
 import joblib
@@ -714,10 +714,12 @@ def train_pipeline(  # noqa: PLR0913, PLR0915 — single-file orchestration; eig
         mlflow.log_metric("test_ece_calibrated", test_ece_cal)
         mlflow.set_tag("calibration_method", cal_method)
 
-        # Save model + calibrator.
+        # Save model + calibrator. `LightGBMFraudModel.save` writes
+        # `lightgbm_model.joblib` + manifest sidecar; we dump the
+        # calibrator next to it as `calibrator.joblib` (separate file
+        # so Sprint 5's serving stack can load them independently and
+        # so the manifest stays calibrator-agnostic).
         model_path, _manifest_path = model.save(models_dir)
-        # Rename to the canonical path if `LightGBMFraudModel.save` used a
-        # different filename; mirror is OK so consumers know where to look.
         cal_path = models_dir / _CALIBRATOR_FILENAME
         joblib.dump(calibrator, cal_path)
 
@@ -788,7 +790,10 @@ def _stratified_subsample(df: pd.DataFrame, target_n: int, seed: int = 42) -> pd
         stratify=df["isFraud"],
         random_state=seed,
     )
-    return kept.reset_index(drop=True)
+    # `cast` because `train_test_split`'s return type is too loose for
+    # mypy to narrow back to `pd.DataFrame`; the runtime type is
+    # guaranteed by the input.
+    return cast(pd.DataFrame, kept.reset_index(drop=True))
 
 
 # ---------------------------------------------------------------------

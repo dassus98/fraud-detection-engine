@@ -39,7 +39,7 @@ from __future__ import annotations
 import dataclasses
 import time
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import click
 import matplotlib
@@ -181,7 +181,11 @@ def _stratified_subsample(df: pd.DataFrame, target_n: int, seed: int = 42) -> pd
         stratify=df["isFraud"],
         random_state=seed,
     )
-    return kept.reset_index(drop=True)
+    # `cast` because `train_test_split`'s return type is too loose for
+    # mypy to narrow back to `pd.DataFrame`. Same pattern as
+    # `train_lightgbm.py` and `train_neural.py` — Sprint 6 follow-on
+    # is to extend `make typecheck` to cover `scripts/`.
+    return cast(pd.DataFrame, kept.reset_index(drop=True))
 
 
 # ---------------------------------------------------------------------

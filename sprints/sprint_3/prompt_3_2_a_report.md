@@ -246,3 +246,148 @@ Verification re-passed. Ready for John to commit the CI fix on
 ```
 3.2.a: tighten Tier-5 perf-test skip-gate to check CSV not MANIFEST
 ```
+
+---
+
+## Audit — sprint-3-complete sweep (2026-05-02)
+
+Re-audit on branch `sprint-3/audit-and-gap-fill` (off `main` at `ad266e5`). Goal: verify the 3.2.a deliverables and design rationale before tagging `sprint-3-complete`.
+
+### 1. Files verified
+
+| Artefact | Status | Notes |
+|---|---|---|
+| `src/fraud_engine/features/tier5_graph.py` | ✅ present | **1,229 LOC** (was 425 at original commit). Growth (+804 LOC) is from 3.2.b/c additions (`GraphFeatureExtractor` + 8 graph features) shipped to the SAME file. The 3.2.a `TransactionEntityGraph` class itself is at lines 302-541, ~240 LOC, structurally unchanged. |
+| `tests/unit/test_tier5_graph_construction.py` | ✅ present | 390 LOC (originally 311); +79 LOC from added introspection tests since (audit-noted, not breaking). |
+| `src/fraud_engine/features/__init__.py` re-export | ✅ present | `TransactionEntityGraph` exported alongside `GraphFeatureExtractor` (added in 3.2.b). |
+| `sprints/sprint_3/prompt_3_2_a_report.md` | ✅ present | This file. |
+
+**Audit finding A (file growth from later prompts; not a defect):** `tier5_graph.py` carries the Tier-5 feature extractor (`GraphFeatureExtractor`) added in 3.2.b/c alongside the 3.2.a primitive. This is intentional — the two are tightly coupled (extractor consumes graph) and same-file co-location is the right call. No regression to 3.2.a's `TransactionEntityGraph` class itself.
+
+### 2. Loading / build re-verification
+
+```
+$ uv run pytest tests/unit/test_tier5_graph_construction.py -v --no-cov
+======================= 15 passed, 14 warnings in 50.08s =======================
+```
+
+15/15 pass; slow benchmark included (skip-gated correctly per the CI follow-up — gate now checks `data/raw/train_transaction.csv`, not the always-tracked `MANIFEST.json`). Build wall-time **50.08 s** at this run vs **56.52 s** at original (modest improvement; same machine, same data).
+
+### 3. Business logic walkthrough
+
+The `TransactionEntityGraph.build()` flow:
+
+1. **Validate** required columns present (`TransactionID` + every entity column); raise `KeyError` on missing.
+2. **Replace** the prior graph (`self.graph = nx.Graph()`) — idempotent guarantee.
+3. **Pre-extract** entity arrays to numpy via `df[ec].to_numpy()` once (5-10× faster than per-row pandas access at 414k rows).
+4. **Iterate** rows: add txn node with `bipartite=0`; for each entity column with non-NaN value, add entity node with `bipartite=1, subtype=entity_col` and connect with edge.
+5. NaN entity values **silently skipped** (no node, no edge — matches "no sentinel node" decision).
+6. **Idempotent** node/edge additions: `add_node` and `add_edge` deduplicate automatically — multiple txns sharing one card produce one card entity node with `degree=N`.
+
+The implementation matches the spec contract: pure construction primitive, no feature derivation, training-data-only with the temporal-safety contract enforced by the caller.
+
+### 4. Expected vs realised
+
+| Spec contract | Realised (from latest re-run) |
+|---|---|
+| Bipartite networkx graph (txn ↔ entity) | `nx.Graph()` with `bipartite={0,1}` attribute ✅ |
+| Node types: `txn` (TransactionID), `entity` (with subtype) | Tuple-keyed `("txn", id)` and `(entity_col, value)`; entity nodes carry `subtype=entity_col` attr ✅ |
+| Edges: txn ↔ entity where transaction uses that entity | One edge per (txn, entity) pair, NaN entities skipped ✅ |
+| Built from training data only | `build(splits.train)` is the contract; verified by `test_val_transactions_not_in_graph` ✅ |
+| Synthetic graph of known structure → expected counts | `test_minimal_3row_synthetic_graph`: 3 rows → 7 nodes (3 txn + 2 card + 2 addr) + 6 edges ✅ |
+| Memory: full 590k dataset graph fits <8 GB | **0.461 GB tracemalloc peak** on 414k train (~17× under ceiling); 18.70 s build wall ✅ |
+| Node/edge counts match plan estimates | 414,542 txn + 14,174 entity = 428,716 nodes; 1,223,034 edges (planned: ~414k + ~14-20k entity, ~1.5-1.7M edges) ✅ |
+
+**No spec gaps.** Memory is dramatically under ceiling; graph construction is correct; training-only contract enforced.
+
+### 5. Test coverage check
+
+**15 tests across 5 classes** cover:
+
+- `TestSyntheticConstruction` (5) — hand-computed correctness on 3-row + edge-case frames (NaN-skip, dedup, attribute correctness, idempotency)
+- `TestTrainingOnlyContract` (2) — temporal-safety gate + introspection method coverage
+- `TestSaveLoad` (3) — persist + reload bit-exact + reject wrong-type payload
+- `TestPerformance` (1, slow + skip-gated) — full IEEE-CIS memory benchmark
+- `TestErrorHandling` (4) — missing columns, missing path, pre-build state, has_*-on-empty
+
+The hand-computed `test_minimal_3row_synthetic_graph` is the most diagnostic — any algorithmic regression in `build()` (NaN handling, idempotency, attribute setting) would fail this test cleanly.
+
+### 6. Lint / logging / comments check
+
+- **Lint:** ✅ ruff clean across all artefacts.
+- **Logging:** Class deliberately uses **no `structlog`** in the build hot loop — `build()` is called from one place (the build script, which has its own `Run` context manager) and per-row logging would dominate the budget. Acceptable; matches `ExponentialDecayVelocity`'s logging discipline.
+- **Comments:** ~180 LOC teaching-document module docstring (concept + bipartite math + 8 trade-offs); per-method docstrings include attribute documentation + Raises lists. The `bool(...)` wrappers around networkx return values are commented in-context. No thin spots.
+
+### 7. Design rationale (the heart of the audit)
+
+#### Justifications
+
+- **Why a graph at all (vs more tabular features):** the per-entity tier features (Tier-2 velocity, Tier-3 behavioural, Tier-4 EWM) all measure ONE entity in isolation. They cannot represent the **shared infrastructure across distinct cards** that's the signature of organised fraud (one device → many cards; one address chain → many accounts). A bipartite graph is the natural data structure: txn nodes connected to entity nodes; one entity connected to many txn nodes is exactly the "many cards rotating through one device" pattern.
+- **Why bipartite (not unipartite):** queries flow naturally in BOTH directions — "which transactions touched this card?" and "which cards did this transaction touch?". `nx.bipartite.*` algorithms (clustering, projection, centrality) work directly on bipartite graphs. A unipartite "card-card co-occurrence" graph would lose the txn-level granularity that downstream feature derivation (degree, fraud-neighbour-rate, pagerank) needs.
+- **Why train-only construction:** the temporal-safety contract that runs through every other tier (Tier-2 OOF, Tier-3 fold-aware fitting, Tier-4 read-before-push). Adding val/test transactions as nodes would let the model peek at future structure when scoring val rows. Cold-start handling (val/test rows whose entities aren't in the train graph) is a downstream concern (handled by `ColdStartHandler` for the pre-graph case, and per-feature decision for graph features).
+- **Why `nx.Graph` (not `nx.DiGraph`):** queries flow both ways naturally; no useful direction in our model (`txn` → `entity` and `entity` → `txn` carry the same information). Using `DiGraph` would force an arbitrary direction choice and double the bookkeeping. Future prompts may switch if directionality becomes useful (e.g. "card created before transaction" — but that's a Tier-7+ thought experiment).
+
+#### Consequences
+
+| Dimension | Positive | Negative |
+|---|---|---|
+| Data structure | Bipartite is queryable, projectable, and pickleable | networkx is python-only; no native columnar / parquet representation (Sprint 5 may need an edge-list parquet export — deferred) |
+| Memory | 0.461 GB tracemalloc peak — well within budget | networkx node/edge dicts are slower than typed arrays; full graph in process is ~10-20× heavier than the equivalent edge-list parquet would be |
+| Build time | 18.7 s on 414k rows; acceptable | per-row `add_edge` loop is ~5-10× slower than vectorised `add_edges_from` (deferred optimisation) |
+| Reproducibility | Idempotent build; deterministic node iteration order (with networkx's stable insertion order); pickleable | networkx version pinning matters (subtle changes between minor versions can break pickle compat) |
+| Composability | Subsequent generators consume the graph as a dependency-injected object | One-graph-per-process: not thread-safe for concurrent reads-and-writes (acceptable; build is offline, reads are read-only after build) |
+
+#### Alternatives considered and rejected
+
+1. **`BaseFeatureGenerator` subclass.** Rejected: the deliverable is a graph, not a column-emitting transformation. Would force a fake `transform()` returning the input unchanged plus side-effects to a `.graph` attribute — confusing and fragile.
+2. **String-keyed nodes** (e.g. `f"txn-{id}"` and `f"{entity_col}-{value}"`). Rejected: collision risk between e.g. `card1=13553` and `addr1=13553`; tuple keys naturally namespace by the first element. Joblib pickles tuples natively; the only cost is graphml/gexf export needing adapter logic (we use joblib).
+3. **NaN-as-sentinel-node.** Rejected: `DeviceInfo` is ~76% null per the EDA. A single "missing-DeviceInfo" sentinel would connect to ~3/4 of all transactions and dominate every graph metric. `MissingIndicatorGenerator` (Sprint 2.1.d) already produces `is_null_*` columns for this signal.
+4. **`partial_build` / streaming-update API.** Rejected for Sprint 3: increases invariant complexity; can't guarantee determinism if events arrive out-of-order. Sprint 5's serving stack may need this — deferred.
+5. **Materialised projection graphs** (e.g. card-card co-occurrence via `bipartite.projected_graph`) at construction time. Rejected: feature-derivation decision; may produce dense N×N graphs at 12k cards × 1.5M edges. Subsequent feature generators (3.2.b/c) compute projections on demand.
+6. **Pre-allocated graph size** (`nx.Graph()` with capacity hint). networkx doesn't support this; ignored.
+
+#### Trade-offs
+
+The module docstring documents 8 trade-offs explicitly (standalone primitive vs `BaseFeatureGenerator` subclass; tuple-keyed vs attribute-keyed; undirected vs directed; skip-NaN vs sentinel-node; build-idempotency vs streaming-update; joblib+JSON vs parquet edge-list; itertuples vs iterrows; pre-extract entity arrays). All 8 are realised in code and tested.
+
+#### Potential issues to arise
+
+- **networkx version pinning.** Pickle compat between networkx 3.4.x → 4.x is not guaranteed. The pinned `networkx==3.4.2` in `pyproject.toml` mitigates this; the manifest's `library_versions` field captures it for audit.
+- **Memory growth at scale.** 0.461 GB at 414k rows; linear in row count and entity-count. A 10× larger dataset (4M rows) would land at ~5 GB — still under 8 GB but tighter. If we ever scale to 100M+ rows, networkx's per-node/edge overhead becomes the bottleneck and a switch to a typed adjacency-list (e.g. PyTorch Geometric's edge_index tensor) becomes necessary. Mitigated: 3.4.b's FraudGNN uses exactly that PyG `edge_index` representation, so the migration path exists.
+- **`add_edge` per-row loop is slow.** ~22k edges/sec on a single CPU. At 10× scale the build wall would push past 3 minutes. Vectorised `add_edges_from(zip(src, dst))` would 5-10× this; deferred until build wall becomes a bottleneck.
+- **No streaming-update API.** Sprint 5's real-time serving stack would need to add a transaction's edges when scoring it. Currently the entire graph is rebuilt on each batch; streaming would require additional invariants (out-of-order events, atomic node-add-then-edge).
+- **No edge-list parquet export.** Sprint 5's batch-feature pipeline (which feeds Model A) might want a parquet edge-list for portability and downstream consumption (e.g. Spark joins). Deferred until Sprint 5's design is locked.
+
+#### Scalability
+
+- **Build wall-clock:** 18.7 s at 414k rows. Linear; estimated 187 s at 4.1M rows.
+- **Heap (tracemalloc):** 0.461 GB at 414k rows. Linear in nodes + edges; estimated ~5 GB at 4.1M rows. Under 8 GB until ~7-8M rows; would require PyG migration past that.
+- **Disk (joblib payload):** ~30-50 MB at 414k rows. Linear.
+- **Sprint-5 production-serving:** Read-only graph queries (`has_entity`, neighbour walks) are O(1) per node lookup. Concurrent reads are safe (networkx graph object is read-thread-safe after build). Streaming updates (the future inductive case) would need a different data structure.
+- **Feature column scaling:** zero columns from this prompt by design; constraint is "construction only."
+
+#### Reproducibility
+
+- **Idempotent build:** calling `build()` twice with the same frame produces identical graphs (verified by `test_build_idempotent_replaces_graph`).
+- **Deterministic node order:** networkx preserves insertion order on its `dict`-backed node store. Reading `.nodes(data=True)` returns nodes in deterministic order across runs.
+- **Save/load round-trip:** `test_load_round_trip_produces_identical_graph` asserts identical node sets, edge sets, and node attributes after pickle reload.
+- **Library version captured:** the JSON manifest sidecar records networkx version + schema version + entity_cols list + node/edge counts.
+- **Memory benchmark with skip-gate:** `test_full_data_memory_under_8gb` is skip-gated on the actual CSV (not the manifest) so CI can run without the dataset; locally with the dataset the benchmark runs and reports `tracemalloc` peak. CI follow-up after PR #29's first-run failure documented above.
+
+### 8. Gap-fills applied
+
+**None required.**
+
+The CI follow-up (skip-gate fix) was already applied to the source on `main`; this audit confirms the test still skips correctly when the CSV isn't present (CI-side) and runs cleanly when the CSV is present (local).
+
+### 9. Open follow-ons / Sprint 4 candidates
+
+- **Vectorised `add_edges_from` build path** for 5-10× speedup. Deferred because the current build wall is well within budget (18.7 s on 414k rows).
+- **Edge-list parquet export** for Sprint-5 serving / batch pipeline portability.
+- **Streaming graph updates** for Sprint-5 real-time inductive scoring (currently the graph is rebuilt offline; a hybrid "seed graph + per-request inductive add" pattern would be the bridge).
+- **Project to PyG `edge_index` representation** as a lazy property — would let downstream Tier-7+ generators consume the graph through whichever interface (networkx for set-theoretic queries, PyG for tensor-based message passing) without duplication.
+- **Network version compat tests** — assert the pickle round-trip works across the pinned networkx version + a candidate next version. Sprint-4 cleanup.
+
+### Audit conclusion
+
+**3.2.a is spec-complete, audit-clean, and architecturally sound.** All 15 tests pass at 50.08 s wall (slight improvement on original 56.52 s); memory benchmark passes at 0.461 GB peak (~17× under ceiling); build wall 18.7 s on 414k rows. The construction primitive is correctly minimal — no feature columns emitted, just the graph. Subsequent prompts (3.2.b, 3.2.c) consume it. **No code changes required.**
