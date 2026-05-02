@@ -33,6 +33,7 @@ dependencies = [
   "cleanlab==2.9.0",
   "torch==2.5.1",
   "torch-geometric==2.6.1",
+  "pyg-lib==0.4.0",  # 3.4.b: required by torch-geometric NeighborLoader; CPU wheel via [tool.uv.sources]
   "networkx==3.4.2",
   # --- plotting / stats (Sprint 1 notebook imports these explicitly;
   # transitive via sklearn/shap but pinned here so --nbmake runs
@@ -81,6 +82,12 @@ packages = ["src/fraud_engine"]
 # uv resolves the [project.optional-dependencies.dev] group via
 # `uv sync --all-extras`. The Makefile uses that target.
 package = true
+
+[tool.uv.sources]
+# `pyg-lib` ships per-(torch-version, platform) wheels from
+# data.pyg.org rather than PyPI. We pin the CPU wheel for torch
+# 2.5.x via this source override.
+pyg-lib = { url = "https://data.pyg.org/whl/torch-2.5.0%2Bcpu/pyg_lib-0.4.0%2Bpt25cpu-cp311-cp311-linux_x86_64.whl" }
 
 [tool.pytest.ini_options]
 minversion = "8.0"
