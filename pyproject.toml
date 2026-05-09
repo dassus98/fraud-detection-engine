@@ -73,6 +73,12 @@ dev = [
   "pandas-stubs==2.2.3.241126",
   "types-click==7.1.8",
   "ydata-profiling==4.18.1",
+  # Sprint 5.1.b: in-process async Redis fake for unit tests so
+  # `make test-fast` runs without a docker-compose Redis. The
+  # bonus integration test (`tests/integration/test_redis_store_*`)
+  # still hits real Redis when reachable. Pin >=2.20 (current 2.x
+  # stable line; API surface stable).
+  "fakeredis>=2.20",
 ]
 
 [tool.hatch.build.targets.wheel]

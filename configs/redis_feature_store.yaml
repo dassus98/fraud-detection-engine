@@ -1,0 +1,73 @@
+# Per-feature TTL configuration for `RedisFeatureStore` (Sprint 5.1.b).
+#
+# Consumed at runtime by `src/fraud_engine/api/redis_store.py` via the
+# `_load_ttl_config` helper. Pattern matching is unix-glob (Python's
+# `fnmatch.fnmatch`), evaluated **first-match-wins** in declaration
+# order. Any feature name that matches no pattern falls through to
+# `default_ttl_seconds` below.
+#
+# This file is the single source of truth for online-store retention
+# policy. Editing the values here changes every running API instance's
+# expiry behaviour as soon as the next `RedisFeatureStore.__init__` is
+# called (Sprint 5.1.c will tie this to the FastAPI lifespan startup).
+#
+# -- TTL math (load-bearing rationale) -------------------------------
+#
+# 1. Tier-2 velocity windows (`*_velocity_{1h,24h,7d}`):
+#    TTL = window length. The value is by definition undefined for
+#    events older than the window; the row should expire as the
+#    window slides off it. Anything else stores stale counts.
+#
+# 2. Tier-2 historical amount stats (`*_amt_*_30d`):
+#    TTL = 30 days. Same window-length rationale.
+#
+# 3. Tier-4 EWM running state (`*_v_ewm_lambda_*`,
+#    `*_fraud_v_ewm_lambda_*`): TTL = 7 days. Derivation:
+#      - λ = 0.05/hour → half-life = ln(2) / 0.05 ≈ 13.86 hours.
+#      - 7 days = 168 hours ≈ 12.1 half-lives.
+#      - After 12 half-lives, EWM state has decayed to (1/2)^12 ≈
+#        0.000244 of its initial magnitude — operationally zero.
+#      - Storing decay-to-zero state burns Redis memory for no
+#        information gain; TTL=7d expires the row at the point
+#        it is already operationally zero.
+#    Faster λ (0.1, 0.5/h) decay even more quickly, so 7d still
+#    overshoots — single TTL keeps the surface coherent.
+#
+# 4. Tier-3 cold-start flags (`is_coldstart_*`): TTL = 7 days.
+#    Tracks alongside the EWM family so a stale cold-start
+#    indicator never out-lives the underlying state.
+#
+# 5. Tier-5 graph features (`pagerank_*`, `connected_component_*`,
+#    `entity_degree_*`): TTL = 1 day. These are batch-recomputed
+#    daily by an offline job; row should expire at the next
+#    refresh boundary.
+#
+# 6. Target-encoder values (`*_target_enc_*`): TTL = 1 day.
+#    Refreshed with each Sprint-2 nightly retrain.
+#
+# 7. Default (`default_ttl_seconds`): 7 days. Matches the longest
+#    "stateful" TTL above; an unknown new feature gets the
+#    most-conservative retention until its pattern is added.
+#
+# -- Out of scope for Sprint 5.1.b ------------------------------------
+#
+# - Per-deployment overrides (production override of these defaults).
+#   Sprint 5.x candidate.
+# - Variable TTLs by entity type (e.g. shorter TTL for
+#   `DeviceInfo` since coverage is only ~24%). Sprint 5.x.
+# - Negative-cache TTLs for guaranteed-missing keys. Sprint 5.x.
+
+default_ttl_seconds: 604800  # 7 days = ~12 half-lives @ λ=0.05/h
+
+ttl_by_pattern:
+  - { pattern: "*_velocity_1h",          ttl_seconds: 3600    }   # 1h window
+  - { pattern: "*_velocity_24h",         ttl_seconds: 86400   }   # 24h window
+  - { pattern: "*_velocity_7d",          ttl_seconds: 604800  }   # 7d window
+  - { pattern: "*_amt_*_30d",            ttl_seconds: 2592000 }   # 30d window
+  - { pattern: "*_v_ewm_lambda_*",       ttl_seconds: 604800  }   # 12 half-lives
+  - { pattern: "*_fraud_v_ewm_lambda_*", ttl_seconds: 604800  }   # 12 half-lives
+  - { pattern: "is_coldstart_*",         ttl_seconds: 604800  }   # tracks EWM family
+  - { pattern: "pagerank_*",             ttl_seconds: 86400   }   # daily batch
+  - { pattern: "connected_component_*",  ttl_seconds: 86400   }   # daily batch
+  - { pattern: "entity_degree_*",        ttl_seconds: 86400   }   # daily batch
+  - { pattern: "*_target_enc_*",         ttl_seconds: 86400   }   # daily retrain
