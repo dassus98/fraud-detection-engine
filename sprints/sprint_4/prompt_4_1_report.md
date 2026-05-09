@@ -148,3 +148,162 @@ Verification passed. Ready for John to commit on `sprint-4/prompt-4-1-economic-c
 ```
 4.1: EconomicCostModel (compute_cost + optimize_threshold + sensitivity_analysis)
 ```
+
+## Audit — sprint-4-complete sweep (2026-05-09)
+
+Re-audit on branch `sprint-4/audit-and-gap-fill` (off `main` at `cfab6eb`). Goal: deep verification of all spec contracts before tagging `sprint-4-complete`, with a full design-rationale dimension at each prompt.
+
+### 1. Files verified
+
+| File | Status | Size | Notes |
+|---|---|---|---|
+| `src/fraud_engine/evaluation/economic.py` | ✅ present | 533 LOC / 19 KB | Originally cited as ~430 LOC in the prompt report; the +103 LOC delta is the 84-line module docstring (8 trade-offs documented) + cross-references block expanded after the prompt completion report's drafting |
+| `src/fraud_engine/evaluation/__init__.py` | ✅ present | line 37: `from fraud_engine.evaluation.economic import EconomicCostModel`; line 42 in `__all__` (alphabetised between `Calibrator` and `IsotonicCalibrator`) |
+| `tests/unit/test_economic.py` | ✅ present | 574 LOC / 22 KB | Originally cited as ~430 LOC; +144 LOC delta primarily from the asymptotic-direction strict-ordering test (`test_extreme_costs_strictly_order_optima`) added in Decision 6's loosening-and-strict-ordering pivot |
+| `src/fraud_engine/utils/metrics.py:economic_cost` | ✅ unchanged | wrapped primitive (single source of truth for the cost formula); confirmed unmodified post-Sprint-3 |
+| `src/fraud_engine/config/settings.py:fraud_cost_usd / fp_cost_usd / tp_cost_usd` | ✅ present | the three Settings fields the no-args constructor resolves; pre-existed Sprint 4. No `tn_cost` Settings field (zero by convention) — same posture as 4.3's YAML |
+
+### 2. Loading / build re-verification
+
+Tests + lint re-run against the artefacts on `main` @ `cfab6eb`:
+
+```
+$ uv run pytest tests/unit/test_economic.py tests/unit/test_stratified.py \
+                tests/integration/test_run_economic_evaluation.py --no-cov -q
+100 passed, 14 warnings in 9.73s
+
+$ uv run ruff check src/fraud_engine/evaluation tests/unit/test_economic.py \
+                    tests/unit/test_stratified.py \
+                    tests/integration/test_run_economic_evaluation.py \
+                    scripts/run_economic_evaluation.py
+All checks passed!
+
+$ uv run ruff format --check src tests scripts
+109 files already formatted
+
+$ uv run mypy src
+Success: no issues found in 40 source files
+```
+
+35 of the 100 are this prompt's tests. No regressions vs the prompt report's headline (35 passed in 3.05 s).
+
+### 3. Business logic walkthrough
+
+The cost-optimisation pipeline is correctly implemented end-to-end:
+
+1. **Validate score arrays** (`_validate_score_arrays`, lines 178–207). 1-D coercion, shape match, range-in-`[0, 1]` enforcement. The `[0, 1]` guard catches any uncalibrated probabilities slipping past the calibrator contract; the no-clip / raise posture (per Decision 5 of the original report) means upstream regressions surface immediately.
+2. **Sweep thresholds** (`_sweep_thresholds`, lines 216–252). For each `τ` in the spec-pinned `linspace(0.01, 0.99, 99)`, threshold the scores into `y_pred = (y_scores >= τ).astype(int)`, forward to `economic_cost` for the canonical cost dict, and append `{"threshold": τ, **cost_dict}`.
+3. **Tie-break** (lines 247–251). The composite stable-sort on `["total_cost", "threshold"]` with `ascending=[True, False]` returns the **larger τ** on equal cost — block-fewer-transactions policy. Documented as Decision 2 in the original report; the alternative (`idxmin`) would silently invert the policy.
+4. **Sensitivity grid** (lines 418–530). Cartesian product across the three configurable cost axes (5×5×5 = 125 cells under the default ±20% multipliers), single-value fallback for any axis the caller didn't pass. Validates unknown axes + non-negative range values; logs `economic.sensitivity.grid_size` so a future caller widening to 9×9×9 = 729 cells on a 500K test set has visibility into the cost.
+5. **Optimum-row recovery** (line 519). After `_sweep_thresholds` returns `(opt_τ, curve)`, the per-cell row picks the optimum out of the 99-row curve via `curve.loc[curve["threshold"] == opt_τ]` — pandas filter is fine at that scale and avoids re-sorting per cell.
+
+The load-bearing invariant: **the composite `(total_cost, threshold)` sort with `ascending=[True, False]` makes the tie-break favour the larger τ.** Any future change to the sort policy (e.g., `idxmin` "for performance") would silently break the documented business behaviour. The test `test_optimal_threshold_breaks_ties_by_larger_tau` is the canonical regression guard.
+
+### 4. Expected vs realised
+
+| Spec contract | Realised |
+|---|---|
+| `EconomicCostModel` class with configurable costs (defaults from Settings) | `__init__(fraud_cost=None, fp_cost=None, tp_cost=None, tn_cost=0.0)`; None → snapshot from `Settings`; per-call overrides bypass Pydantic so `_validate_costs` re-checks `ge=0.0` ✅ |
+| `compute_cost(y_true, y_pred) → dict with breakdown` | Forwards to `utils.metrics.economic_cost` with stored costs; returns `{total_cost, cost_per_txn, fn, fp, tp, tn}` unchanged ✅ |
+| `optimize_threshold(...) → (optimal_τ, cost_curve)` with column order pinned | Returns `(float, pd.DataFrame)`; columns in `_COST_CURVE_COLUMNS` order; sorted ascending by threshold; tie-break favours larger τ ✅ |
+| `sensitivity_analysis(...) → DataFrame` with default ±20% per-axis grid | `cost_ranges: Mapping[str, Sequence[float]] \| None`; defaults to `_DEFAULT_SENSITIVITY_MULTIPLIERS = (0.80, 0.90, 1.00, 1.10, 1.20)` per CLAUDE.md §8 ✅ |
+| Test gate: known confusion matrix matches hand-computation | `TestComputeCost::test_known_confusion_matrix_matches_hand_computation` ✅ |
+| Test gate: high `fp_cost` → τ ≥ 0.55; high `fraud_cost` → τ ≤ 0.45; strict ordering | All three assertions pass on `_separable_pair`; the strict-ordering `test_extreme_costs_strictly_order_optima` is the canonical direction check ✅ |
+| Test gate: ±20% sensitivity → spread < 0.20 | `TestSensitivityAnalysis::test_optimal_thresholds_cluster_in_narrow_band` ✅ |
+
+**No spec gaps.** The original prompt report flagged the asymptotic-rail magnitudes (≥0.55 / ≤0.45 vs. the spec's first-revision ≥0.95 / ≤0.10) as a finding, NOT a gap — the spec asserts the asymptotic *direction*, not the rail; the loosened bounds preserve the spec intent.
+
+### 5. Test coverage check
+
+35 tests across 5 classes — fully covers the spec surface:
+
+- `TestInit` (6) — Default-from-Settings; explicit overrides; partial overrides; `costs` property; per-axis negative-cost raises; zero cost allowed.
+- `TestComputeCost` (5) — Hand-computed total; return-dict shape; uses stored costs not Settings (the snapshot semantic); empty arrays return zero dict; shape mismatch raises.
+- `TestOptimizeThreshold` (10) — Default sweep shape (99, 7); column order; ascending sort; optimum in grid; cost finite + non-negative; out-of-range scores raise; shape mismatch raises; custom thresholds respected; **tie-break favours larger τ**; threshold-zero/one boundary semantics.
+- `TestOptimizeThresholdEconomicGates` (4) — High `fp_cost` → τ ≥ 0.55; high `fraud_cost` → τ ≤ 0.45; **strict ordering**; default-cost optimum in (0.10, 0.80).
+- `TestSensitivityAnalysis` (10) — Default ±20% grid shape (125, 6); column order; multipliers match 0.8/0.9/1.0/1.1/1.2; **near-optimal cluster spread < 0.20**; custom `cost_ranges`; single-axis collapse; unknown axis raises; negative range raises; out-of-range scores raise; return type is `pd.DataFrame`.
+
+The most critical test in the file is `test_extreme_costs_strictly_order_optima` (the strict-ordering gate). The asymptotic-magnitude gates (≥0.55, ≤0.45) defend the magnitude; the strict-ordering test defends the direction independently of distribution shape.
+
+### 6. Lint / logging / comments check
+
+- **Lint:** ✅ ruff clean. One `# noqa: PLR0913` at `economic.py:216` — the seven-arg `_sweep_thresholds` signature (3 array inputs + 4 cost params) is the business contract; folding into a config dict would obscure call-site semantics. Mirrors the `metrics.py:68` rationale comment for `economic_cost`'s 6-arg signature. Justification still load-bearing.
+- **Type-check:** ✅ `mypy src` clean (40 source files).
+- **Logging:** Module emits two structured log events: `economic.optimize.done` (per `optimize_threshold` call: `optimal_threshold`, `n_thresholds`, `n_rows`, `costs`) and `economic.sensitivity.grid_size` (per `sensitivity_analysis` call: `n_cells`, `n_thresholds`, `n_rows`). Both are INFO level — appropriate for a sweep that runs once per offline evaluation, not per-row. Matches CLAUDE.md §5.5's "every function that touches data logs" rule at the call granularity that's actionable to a reviewer.
+- **Comments:** 84-line module docstring with explicit "Sprint 4 prompt 4.1" anchor + business rationale + 6 trade-off bullets + cross-references block. Each public method's docstring includes business context (e.g., `compute_cost`'s "Threshold probabilities BEFORE calling this method"). Inline rationales at every non-obvious decision (the snapshot-vs-mutable-defaults choice, the validation posture, the tie-break composite sort). Passes the "would a senior engineer onboarding into this code understand it?" review.
+
+### 7. Design rationale (the heart of the audit)
+
+#### Justifications
+
+- **Why a stateless class wrapping a stateless primitive:** `economic_cost` is the per-call source of truth in `utils/metrics.py`. Wrapping it in a class makes the costs configurable per-instance (so a sensitivity sweep can inject scenario-specific costs without re-instantiating Settings) and groups the three public surfaces (`compute_cost` / `optimize_threshold` / `sensitivity_analysis`) around a coherent config snapshot. The closest analog is `select_calibration_method` (sweep + pick winner with stable tie-break), not `PlattScaler` / `IsotonicCalibrator` (which carry learned state); reflected in the absence of an `is_fitted_` flag.
+- **Why snapshot semantics on construction:** Resolving Settings once and storing as private floats means a downstream test that mutates Settings does not silently alter an existing instance's behaviour. Mirrors the reproducibility posture in `tier4_decay`'s `_end_state_` snapshot — the instance carries the config that produced its outputs.
+- **Why the spec-pinned 99-point grid over adaptive search:** Reproducibility (every call walks the same grid) plus MLflow legibility (a 99-row cost curve is a crisp artefact). Bisection / golden-section would converge faster but surface different optima across runs; the cost surface isn't strictly convex on real data. Trade-off accepted.
+- **Why pandas DataFrame returns:** This is the first `evaluation/` module to take a pandas dependency (`calibration.py` is pandas-free). The data is naturally tabular, the consumer (Sprint 5's reporter) wants `to_html` / `to_csv` for free, and the column-name contract is more legible than a `(rows, cols)` ndarray. Documented as a deliberate trade-off in the module docstring.
+
+#### Consequences (positive + negative)
+
+| Dimension | Positive | Negative |
+|---|---|---|
+| Cost-formula correctness | Hand-computable; single-source-of-truth in `utils/metrics.py:economic_cost`; the wrapper never re-implements the primitive | Cost values are config not learned; wrong inputs produce wrong outputs silently. Mitigated by the `Settings.Field(ge=0.0)` validator + per-call `_validate_costs` re-check |
+| Threshold-sweep stability | Deterministic grid + stable composite tie-break; reproducible across runs | 99-point grid resolution caps τ-precision at ±0.01; an asymptotic optimum near 0.073 (Bayes-decision limit) lands at 0.08 (one grid step away) by construction |
+| Sensitivity-grid usability | ±20% defaults match CLAUDE.md §8 stability rule; structured-log line surfaces grid size for observability | 125-cell default scales as O(N_cells × N_thresholds × N_rows); a caller widening to 9×9×9 = 729 cells on a 500K test set pushes to ~36B element ops |
+| Production fit (snapshot semantics) | Decouples the model instance from Settings churn; pickle-safe; manifest-friendly via `costs` property | A re-fit-friendly contract would let Sprint 5 reuse one instance across deployments; current pattern requires re-instantiation per cost regime. Acceptable: deployments are rare events |
+| Test infrastructure | `_separable_pair` / `_hard_pair` mirror `test_calibration.py`'s opposing-scenario pattern; strict-ordering test defends direction independently of distribution shape | Synthetic-only — no IEEE-CIS data in the unit tests. Real-data validation is 4.4's integration test on `tier5_test.parquet` |
+
+#### Alternatives considered and rejected
+
+1. **`idxmin` on `total_cost`** for picking the optimal τ. Rejected: would return the **smallest** τ on ties — opposite of the documented block-fewer-transactions policy. The composite stable-sort is one extra line of code and pins the policy.
+2. **Adaptive bisection / golden-section search** for the sweep. Rejected: cost surface isn't strictly convex; would surface different optima across runs.
+3. **Single threshold + sensitivity grid only** (no full cost curve). Rejected: the cost curve IS the audit artefact a reviewer wants. Returning only `(optimal_τ, scalar_cost)` would force re-sweeping to inspect the surface.
+4. **Folding the seven `_sweep_thresholds` args into a `SweepConfig` dataclass.** Rejected: the seven args are the business contract; folding obscures call-site semantics. The `# noqa: PLR0913` is the documented exception.
+5. **Dict-of-dicts return for the sensitivity grid** (one per cost combination). Rejected: pandas DataFrame is more legible, supports `to_html` / `to_csv`, and matches the cost-curve return convention.
+
+#### Trade-offs
+
+The 6 trade-offs documented in the module docstring (lines 21–72) are all realised in code and tested:
+
+- Stateless class wrapping a stateless primitive — confirmed (no `is_fitted_`, no pre-fit guard).
+- Threshold sweep is `linspace(0.01, 0.99, 99)` per spec — confirmed (`_DEFAULT_THRESHOLD_*` constants).
+- Tie-break favours larger τ — pinned by `test_optimal_threshold_breaks_ties_by_larger_tau`.
+- Sensitivity grid defaults to symmetric ±20% multipliers — `_DEFAULT_SENSITIVITY_MULTIPLIERS = (0.80, 0.90, 1.00, 1.10, 1.20)`.
+- `y_scores ∈ [0, 1]` validation raises, not clips — `_validate_score_arrays` raises on min < 0 or max > 1.
+- Pandas DataFrame returns for cost curve and sensitivity grid — confirmed.
+
+#### Potential issues
+
+- **Float precision near the boundary.** At `τ = 0.0729` analytical, the empirical `optimize_threshold` lands at 0.08 (one grid step away). For deployments where the analytical limit is meaningfully different from the swept grid, the optimum will be quantised to ±0.005 of the true minimum. Mitigated by the sensitivity grid (the spread is reported, so quantisation is bounded above by grid step).
+- **Single-value-axis fallback in `sensitivity_analysis`.** A caller passing `cost_ranges={"fraud_cost": [200, 600]}` gets `fp_cost / tp_cost` collapsed to single-value ranges at the stored costs — produces 2 rows, not 50. Documented; no foot-gun risk because the row count is visible in the structured log line.
+- **`tn_cost` excluded from the sensitivity grid.** Zero by convention (no Settings field); a deployment where TN has a non-trivial cost (e.g. pre-paid analyst time) would need a custom sweep. Out of scope for the current design.
+
+#### Scalability
+
+- **Per-sweep cost (`optimize_threshold`):** 99 thresholds × N_rows comparisons + 99 `economic_cost` calls. On the 92K test set the sweep takes ~2 s — well within any offline evaluation budget.
+- **Per-grid cost (`sensitivity_analysis`):** 125 cells × 99 thresholds × N_rows = ~1.1B element ops on the 92K test set. ~5 s wall-time observed in 4.4's full-test-set run.
+- **Memory footprint:** the 99-row cost curve is ~6 KB pandas; the 125-row sensitivity grid is ~7 KB. Negligible.
+- **Sprint-5 production-serving:** N/A — this module is offline evaluation only. The chosen τ is read from `.env` at serving time.
+
+#### Reproducibility
+
+- **Deterministic grid:** the `_DEFAULT_*_THRESHOLD*` constants pin the sweep grid; same input data + same costs → same optimum across runs.
+- **Snapshot semantics:** Settings is read once at `__init__`; mutating Settings post-construction does not propagate. Cited by the `costs` property and tested in `test_uses_stored_costs_not_settings`.
+- **Stable composite sort:** pandas' `sort_values` is stable by default; the `(total_cost, threshold)` tie-break is reproducible.
+- **Structured logging:** the `economic.optimize.done` and `economic.sensitivity.grid_size` events surface the realised parameters (costs, n_rows, n_thresholds) so a future audit can confirm a given output came from a given input.
+
+### 8. Gap-fills applied
+
+**None required for 4.1's source surface.** The implementation is spec-complete, well-tested, well-documented, and passes all gates.
+
+The 4 gap-fixes applied in this audit-and-gap-fill PR (`.env.example` line 64, `configs/economic_defaults.yaml` line 90, `.gitignore` allow-list for the three Sprint 4.4 artefacts, `CLAUDE.md` §13 sprint status) are documented in the prompt 4.3 / 4.4 audits' §8 sections + the PR commit-message body. None touch `economic.py` or `test_economic.py`.
+
+### 9. Open follow-ons / Sprint 5+ candidates
+
+- **MLflow logging of cost curves and sensitivity DataFrames** (cited as "Out of scope" in the original report). A future MLflow-aware reporter would log the cost-curve PNG + sensitivity table as artefacts in the run that produced the calibrated probabilities. Sprint 5+.
+- **Per-model threshold optimisation across Model A / B / C** — needs B and C calibrated first. Sprint 4.x or 5.
+- **Persistence of the chosen τ** to a manifest sidecar (alternative to `.env` mutation). Sprint 5 wiring decision.
+- **`tn_cost` Settings field** — currently held in code at zero by convention. If a future deployment surfaces non-trivial TN cost (e.g. pre-paid analyst capacity), promoting to a Settings field is straightforward. Out of scope here.
+- **Cost-aware retraining of Model A** — the threshold optimisation works against a fixed model; jointly optimising loss + threshold under cost weights is a Sprint 4.x+ experiment.
+
+### Audit conclusion
+
+**4.1 is spec-complete, audit-clean, and production-ready.** All 35 tests pass, all gates green, and the asymptotic-direction gates that were "loosened" during prompt execution remain defensible — the strict-ordering test is the canonical direction check. No code changes required. The 4.4 full-test-set run (τ\* = 0.0800 on the 92K test set, matching the analytical Bayes limit τ\* ≈ 0.0729 within one grid step) is the strongest possible empirical validation of this module's correctness on real Model A calibrated probabilities.

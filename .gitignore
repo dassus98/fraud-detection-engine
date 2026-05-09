@@ -47,11 +47,14 @@ kaggle.json
 !/reports/model_b_training_report.md
 !/reports/model_c_training_report.md
 !/reports/model_comparison.md
+!/reports/economic_evaluation.md
 !/reports/figures/
 /reports/figures/*
 !/reports/figures/model_a_latency.png
 !/reports/figures/model_b_training_curves.png
 !/reports/figures/model_c_training_curves.png
+!/reports/figures/economic_cost_curve.png
+!/reports/figures/economic_stratified_heatmap.png
 *.joblib
 *.pkl
 *.pt
