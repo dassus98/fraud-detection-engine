@@ -1,0 +1,49 @@
+# Population-default feature values for `FeatureService` (Sprint 5.1.c).
+#
+# Consumed at runtime by `src/fraud_engine/api/feature_service.py` via
+# `_load_feature_defaults`. Used to fill missing entity / batch features
+# in two cases:
+#
+#   1. Redis is unreachable (entity features) — sets degraded_mode=True.
+#   2. Postgres is unreachable (batch features) — sets degraded_mode=True.
+#   3. The entity has no history yet in Redis / Postgres (cold start) —
+#      degraded_mode=False; we just don't have data, which is normal.
+#
+# These defaults are HAND-CRAFTED for 5.1.c. Sprint 5.x's batch loader
+# will regenerate from training-set statistics; see the per-line
+# rationale comments below for the conservative-by-design rationale.
+#
+# All values must be JSON-serialisable (numeric or string). The
+# FeatureService applies them at the feature-name level, with prefix
+# matching against the model's `feature_names_in_` list.
+
+# Tier-2 / Tier-3 / Tier-4 entity features (looked up from Redis).
+# The default of 0.0 reflects "no observed history" — a brand-new entity
+# in production has no velocity, no EWM state, no behavioural baseline.
+# This is also the right answer when Redis is genuinely unreachable:
+# pretending the entity is brand-new is conservative-by-design (the
+# model will treat it as cold-start, which it would do for a real
+# new entity).
+entity_features:
+  default: 0.0                                  # velocity counts, EWM state, behavioural z-scores
+  fraud_v_ewm_default: 0.0                      # fraud-weighted EWM (no historical fraud observed)
+  is_coldstart_default: 1.0                     # missing entity = cold-start (conservative — flags it)
+
+# Tier-5 graph features (looked up from Postgres; stubbed in 5.1.c).
+# These need more thought than entity defaults because graph metrics
+# don't have a clean "no history" interpretation — every node has SOME
+# place in the graph at training time. Hand-crafted values below are
+# conservative defaults that won't push the model toward a strong
+# fraud signal in either direction.
+batch_features:
+  pagerank_score: 0.0001                        # ~ 1/N at IEEE-CIS scale (~590K txn nodes); centred-low default
+  connected_component_size: 1.0                 # singleton component (no graph data → assume node is isolated)
+  clustering_coefficient: 0.0                   # no triangles when graph data missing
+  fraud_neighbor_rate: 0.035                    # IEEE-CIS population fraud rate (CLAUDE.md §1)
+  entity_degree_default: 0.0                    # zero-edge default for `entity_degree_card1` etc.
+
+# Sprint 5.x batch loader will:
+# - Compute mean / median over the training set per feature column.
+# - Persist as the same YAML shape (or a richer per-column shape).
+# - The 5.1.c hand-crafted values above are the fallback when the batch
+#   loader hasn't run yet (e.g. fresh deployment, post-incident restore).
