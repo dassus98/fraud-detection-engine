@@ -272,3 +272,117 @@ never land).
 - [x] **No git commands run** — per CLAUDE.md §2.
 
 Ready for John to commit. (No git action from me.)
+
+---
+
+## Re-verification — sprint-5-era (2026-05-09)
+
+Re-run on branch `sprint-0/prompt-0-1-c-docker-reverification` (off `main` at `f00565b`, post-5.1.e merge). Goal: close the original report's known-gap that **`make docker-up` was never actually exercised** because Docker Desktop / Docker Engine weren't installed at audit time. Docker Engine 29.4.3 was installed natively in WSL Ubuntu earlier in this session, so the docker-up portion of the spec is now verifiable.
+
+### Re-run inputs
+
+- **uv:** `0.11.7` — same as the original audit (no version drift).
+- **Docker Engine:** `29.4.3` (build `055a478`) installed via `get.docker.com` apt repo, systemd-managed (auto-starts on WSL boot).
+- **Docker Compose plugin:** `v5.1.3`.
+- **Sprint 4 + 5 dependency additions since the original audit:** `fakeredis>=2.20` added in 5.1.b; no other runtime adds. `uv sync --all-extras` resolves cleanly (no lock-file changes during this re-verification).
+
+### Spec-list re-run (verbatim from the prompt's verification block)
+
+```text
+$ uv --version
+uv 0.11.7 (x86_64-unknown-linux-gnu)
+
+$ uv sync --all-extras
+Resolved 278 packages in 349ms
+Checked 271 packages in 33ms
+                                       # no install/upgrade lines → lock already current
+
+$ ls uv.lock
+-rw-r--r-- 1 dchit dchit 386892 May  9 15:59 uv.lock
+                                       # 387 KB; up from 384 KB at original audit (+ 5.1.b's fakeredis chain)
+
+$ uv run python -c "import pandas, numpy, pydantic, structlog, pandera, lightgbm, shap, fastapi, redis, torch"
+all imports OK
+                                       # all 10 spec-listed imports green
+
+$ make help
+                                       # 19-target table renders cleanly with ANSI colours
+                                       # (full output omitted — same shape as original audit § Verification)
+```
+
+### Docker-up — the gap closed
+
+```text
+$ make docker-up
+docker compose -f docker-compose.dev.yml up -d
+ Image redis:7.4-alpine                Already present (pulled earlier today)
+ Image postgres:16.4-alpine            Pulled
+ Image ghcr.io/mlflow/mlflow:v3.11.1   Pulled
+ Image prom/prometheus:v3.1.0          Pulled
+ Image grafana/grafana:11.4.0          Pulled
+ Volume fraud-detection-engine_postgres_data    Created
+ Volume fraud-detection-engine_mlflow_data      Created
+ Volume fraud-detection-engine_prometheus_data  Created
+ Volume fraud-detection-engine_grafana_data     Created
+ Container fraud-redis        Running
+ Container fraud-postgres     Started
+ Container fraud-mlflow       Started
+ Container fraud-prometheus   Started → Healthy
+ Container fraud-grafana      Started
+
+$ make docker-ps
+docker compose -f docker-compose.dev.yml ps
+NAME               IMAGE                           STATUS                    PORTS
+fraud-grafana      grafana/grafana:11.4.0          Up 38 seconds (healthy)   127.0.0.1:3000->3000/tcp
+fraud-mlflow       ghcr.io/mlflow/mlflow:v3.11.1   Up 49 seconds (healthy)   127.0.0.1:5000->5000/tcp
+fraud-postgres     postgres:16.4-alpine            Up 49 seconds (healthy)   127.0.0.1:5432->5432/tcp
+fraud-prometheus   prom/prometheus:v3.1.0          Up 49 seconds (healthy)   127.0.0.1:9090->9090/tcp
+fraud-redis        redis:7.4-alpine                Up 8 minutes (healthy)    127.0.0.1:6379->6379/tcp
+```
+
+**All 5 services reach `Up (healthy)` within ~50 s of `make docker-up`.** Each port maps to `127.0.0.1` (loopback only — not exposed to the LAN). Healthchecks are the ones declared in `docker-compose.dev.yml` (Postgres `pg_isready`, Redis `redis-cli ping`, MLflow HTTP 200 on `/`, Prometheus `/-/healthy`, Grafana `/api/health`).
+
+### Package count
+
+```text
+$ uv pip list | wc -l
+273
+```
+
+273 lines = 271 installed packages + 2 header lines. Up from 270 at original audit (+ `fakeredis` and 2 transitives from 5.1.b).
+
+### Resolver warning — unchanged from original audit
+
+The original audit's known gap remains:
+
+```text
+warning: The package `typer==0.23.1` does not have an extra named `all`
+```
+
+Surfaces during `uv sync --all-extras` from `ydata-profiling`'s `setup.cfg`. Harmless (typer 0.23 folded the `all` extra into the base install); upstream bug in ydata-profiling. No action.
+
+### Acceptance checklist (re-verification)
+
+- [x] `uv --version` works → `0.11.7` (no drift).
+- [x] `uv sync --all-extras` resolves cleanly → 278 resolved, 0 installed (lock current).
+- [x] `uv.lock` present + committable → 387 KB.
+- [x] `make help` prints the target table → 19 targets rendered.
+- [x] All 10 spec-list imports succeed (pandas, numpy, pydantic, structlog, pandera, lightgbm, shap, fastapi, redis, torch).
+- [x] **NEW:** `make docker-up` brings up the full 5-service stack.
+- [x] **NEW:** `make docker-ps` shows all 5 services as `Up (healthy)` within ~50 s of startup.
+- [x] **NEW:** Bonus — `make docker-down` (verified earlier in the Docker install session) cleanly stops without losing volumes.
+- [x] Pre-commit hooks (proactive run on the touched report file) pass: trim-trailing-whitespace, fix-end-of-files, ruff, ruff-format, mypy, pytest-fast, detect-secrets, etc.
+- [x] No git commands run beyond the §2.1 carve-out (branch create only).
+
+### Out of scope (Sprint 5.x+ / 6+)
+
+Carrying forward the original audit's open items, plus what 5.1.x established:
+
+- The `typer[all]` resolver warning — same upstream bug; same non-action recommendation.
+- `make test` / `make typecheck` end-to-end runs — these have been exercised continuously across Sprints 4 and 5 (latest baseline: 751 passed at end of 5.1.e); the re-verification here doesn't re-prove that.
+- Project-wide `Settings.*` test discipline audit — Sprint 5+ as previously flagged.
+- `make typecheck` extension to `scripts/` — sixth-time-cited Sprint 6 follow-on.
+
+### Conclusion
+
+**Prompt 0.1.c is now fully verified.** The previously-deferred docker-up portion of the spec works end-to-end: all 5 services boot, all reach healthy on first try, ports map correctly to localhost. Sprint 5.1.f's FastAPI route handler will inherit a fully-functional dev stack on `make docker-up`.
