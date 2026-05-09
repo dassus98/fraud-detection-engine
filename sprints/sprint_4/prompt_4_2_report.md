@@ -156,3 +156,185 @@ Verification passed. Ready for John to commit on `sprint-4/prompt-4-2-stratified
 ```
 4.2: StratifiedEvaluator (per-axis AUC / PR-AUC / cost + heatmap)
 ```
+
+## Audit — sprint-4-complete sweep (2026-05-09)
+
+Re-audit on branch `sprint-4/audit-and-gap-fill` (off `main` at `cfab6eb`). Goal: deep verification of all spec contracts before tagging `sprint-4-complete`, with a full design-rationale dimension at each prompt.
+
+### 1. Files verified
+
+| File | Status | Size | Notes |
+|---|---|---|---|
+| `src/fraud_engine/evaluation/stratified.py` | ✅ present | 835 LOC / 32 KB | Matches the prompt-report headline; no source grooming since the original commit. The `# TODO(sprint-4.x)` MLflow placeholder at line 523 is **accept-as-documented** (NOT a gap-fix) — the comment block at lines 65-71 of the module docstring documents the deferral as a deliberate trade-off |
+| `src/fraud_engine/evaluation/__init__.py` | ✅ present | line 38: `from fraud_engine.evaluation.stratified import StratifiedEvaluator`; line 45 in `__all__` (alphabetised between `PlattScaler` and `brier_score`) |
+| `tests/unit/test_stratified.py` | ✅ present | 540 LOC / 21 KB | Originally cited as ~570 LOC; the -30 LOC delta is the 4.4 gap-fix that pinned `threshold=0.5` in `test_month_with_drift_has_higher_cost_per_txn` (replaced 1 line, added a 9-line docstring; net contribution from rounding the original LOC estimate, not a real shrinkage) |
+| `src/fraud_engine/config/settings.py:decision_threshold` | ✅ unchanged | the Settings field the no-args constructor resolves; pre-existed Sprint 4. **Note:** Settings now reads `DECISION_THRESHOLD=0.080000` from `.env` (post-4.4 mutation); tests using `threshold=None` default now pick up `0.08`, NOT `0.5`. The 4.4 gap-fix targeted the one cost-sensitive test; the project-wide `Settings.*` test discipline audit is Sprint 5+ scope |
+
+### 2. Loading / build re-verification
+
+```
+$ uv run pytest tests/unit/test_stratified.py --no-cov -q
+38 passed, 14 warnings in 2.69s
+
+$ uv run ruff check src/fraud_engine/evaluation/stratified.py tests/unit/test_stratified.py
+All checks passed!
+
+$ uv run mypy src
+Success: no issues found in 40 source files
+
+$ uv run pytest tests/unit -q --no-cov
+522 passed, 34 warnings in 72.43s (0:01:12)
+```
+
+38 of the 522 are this prompt's tests. No regressions.
+
+### 3. Business logic walkthrough
+
+The per-segment evaluation pipeline is correctly implemented:
+
+1. **Validate inputs once** (`_validate_inputs`, lines 533–566). 1-D coercion + shape match + score-range guard (matches the `EconomicCostModel` contract). Frame length and month length must equal `len(y_true)`. Validation runs once per `evaluate()` call, NOT per axis — the per-axis helpers receive already-validated arrays.
+2. **Fan-out to 5 per-axis helpers** (`evaluate`, lines 311–413). Each axis is gated on column presence: missing column → `WARNING(stratified.axis_skipped, axis=...)` and that axis is silently absent from the output. The defensive empty-frame return (line 411) preserves the schema when every axis is skipped.
+3. **Amount-bucket helper** (`_evaluate_by_amount_bucket`, lines 572–590). Half-open `[low, high)` intervals. Edge case: `50.0` lands in `$50-200` (NOT `<$50`) per the half-open convention, pinned by `test_amount_bucket_boundary_50_lands_in_50_to_200`.
+4. **ProductCD / DeviceType helpers** emit one row per unique non-null value (sorted ascending) plus an explicit `(missing)` / `(null)` bucket if any NaNs.
+5. **Identity-coverage helper** uses `id_01.notna()` as the probe — highest-non-null `id_*` column per CLAUDE.md §1's "24% of transactions have device/identity data". A single-column probe avoids conflating identity-coverage with device-type (which `DeviceType.notna()` would do, smearing two signals across the same mask).
+6. **Month helper** (`_evaluate_by_month`, lines 692–707). Caller supplies a Series; strata are whatever unique values appear (sorted). Tier-5 parquet drops `timestamp` (`build_features_all_tiers.py:110-111`), so the caller derives month upstream — least-surprising kwarg pattern.
+7. **Per-stratum metrics** (`_stratum_metrics`, lines 713–794). Three degenerate cases handled explicitly:
+   - Empty stratum → all metrics NaN; cost = 0.
+   - Single-class stratum → AUC/PR-AUC NaN with `WARNING(stratified.degenerate_stratum, reason="single_class")`; cost still computed.
+   - Below `min_stratum_size` → AUC/PR-AUC NaN with `WARNING(stratified.degenerate_stratum, reason="too_small")`; cost still computed.
+8. **Heatmap** (`plot_heatmap`, lines 419–527). Z-score per-metric column, with sign-flip for cost-like metrics so red consistently means "worse" across columns. NaN cells render light-grey via `cmap.set_bad("lightgray")` — no masked-array wrapper needed (matplotlib honours `set_bad` for plain ndarrays per the original report's "Surprising findings" #1).
+
+The load-bearing invariant: **the `_z_score_for_heatmap` sign convention** (lines 800–832). For cost-like metrics, the z-score is NOT flipped (positive z → above mean → worse for cost columns). For higher-is-better metrics (AUC, PR-AUC), the z-score IS flipped (so positive z → below mean → worse). After this transform, "red = worse" is uniform across the heatmap regardless of column type. Any future addition of a new cost-like metric to `_DEFAULT_HEATMAP_METRICS` MUST also be added to `_COST_LIKE_METRICS` (the frozenset at line 152), or the colour direction will silently invert.
+
+### 4. Expected vs realised
+
+| Spec contract | Realised |
+|---|---|
+| `StratifiedEvaluator` class | `class StratifiedEvaluator` with constructor + 2 public methods + 3 read-only properties ✅ |
+| Stratify by amount bucket: <$50, $50-200, $200-500, $500-1K, >$1K | `_DEFAULT_AMOUNT_BUCKETS` constant (5 half-open intervals) ✅ |
+| Stratify by ProductCD | `_evaluate_by_product_cd` emits unique values + `(missing)` bucket ✅ |
+| Stratify by device type (mobile / desktop / null) | `_evaluate_by_device_type` emits unique values + explicit `(null)` bucket ✅ |
+| Stratify by identity coverage (has / no identity) | exactly two strata via `id_01.notna()` probe ✅ |
+| Stratify by temporal (month 5 vs month 6) | `_evaluate_by_month` emits one row per unique value of caller-supplied series — 5/6 are not pinned in code ✅ |
+| Output: long-format DataFrame + heatmap plot | 9-column DataFrame from `evaluate(...)` + `Axes` from `plot_heatmap(...)` ✅ |
+| Spec sub-gate (a): low-amount fraud_rate > high-amount + 0.20 | `test_low_amount_higher_fraud_rate_than_high_amount` ✅ |
+| Spec sub-gate (b): separable PCD AUC > overlapping + 0.10 | `test_separable_product_higher_auc_than_overlapping` ✅ |
+| Spec sub-gate (c): `has_identity` AUC > `no_identity` AUC | `test_has_identity_higher_auc_than_no_identity` ✅ |
+| Spec sub-gate (d): noisy-month cost_per_txn > clean-month | `test_month_with_drift_has_higher_cost_per_txn` (pinned `threshold=0.5` in 4.4's gap-fix) ✅ |
+| Skip-with-warning on missing column / `month=None` | `WARNING(stratified.axis_skipped, ...)` + axis absent ✅ |
+
+**No spec gaps.**
+
+### 5. Test coverage check
+
+38 tests across 5 classes — fully covers the spec surface:
+
+- `TestInit` (9) — Default cost-model from Settings; default threshold from Settings; explicit overrides; threshold-out-of-range raises; `min_stratum_size` validation.
+- `TestEvaluate` (8) — Long-format DataFrame columns; `n_rows` per-axis sums to total; `fraud_rate = n_pos / n_rows` identity; all 5 amount buckets emit; missing-column / `month=None` axis-skipping.
+- `TestPerAxisLogic` (8) — The four spec sub-gates (a)/(b)/(c)/(d); the consolidated headline test; amount-bucket edge case (50.0); device-type `(null)` bucket; identity-coverage exactly two groups.
+- `TestPlotHeatmap` (7) — Returns `Axes`; respects `ax` kwarg; cell annotations include `n=`; cost cells include `$`; `fig.savefig` smoke; unknown metric raises; empty `eval_df` placeholder.
+- `TestErrorHandling` (6) — Score-range / shape / month-length guards; single-class stratum NaN behaviour.
+
+The most critical test in the file is `test_month_with_drift_has_higher_cost_per_txn` (the spec sub-gate (d)) — it's the only test that asserts on `cost_per_txn` and is therefore threshold-sensitive. The 4.4 gap-fix (pinning `threshold=0.5` explicitly) makes the assertion environment-independent.
+
+**Threshold-coupling sweep verified.** Audited every `StratifiedEvaluator()` no-args call in `test_stratified.py` to confirm none of the others is threshold-sensitive:
+
+- `TestInit` calls (lines 175, 183) — assert on `threshold` / `min_stratum_size` properties; threshold-free.
+- `TestEvaluate` calls — assert on DataFrame shape, column ordering, `n_rows` sums, `fraud_rate`. None depend on cost.
+- `TestPerAxisLogic` calls — sub-gates (a) through (c) assert on `fraud_rate` or `auc`, both threshold-free. Only (d) asserts on `cost_per_txn`. **The 4.4 gap-fix is correctly scoped.**
+- `TestPlotHeatmap` calls — assert on plot artefacts (Axes, cell text, savefig). Threshold-free.
+- `TestErrorHandling` calls — assert on raises / warnings. Threshold-free.
+
+Project-wide `Settings.*` test discipline audit is Sprint 5+ scope; the 4.2 surface itself is clean.
+
+### 6. Lint / logging / comments check
+
+- **Lint:** ✅ ruff clean. Two test-file `# noqa` suppressions, both with rationale comments:
+  - `test_stratified.py:27-36` — `# noqa: E402` cluster (matplotlib `use("Agg")` MUST precede `pyplot` import to avoid the GUI-backend default; flagged by ruff as "module-level import not at top of file" but is the canonical workaround).
+  - `test_stratified.py:59` — `# noqa: PLR0915` (synthetic-builder `_small_fixture`; splitting the function would fragment the data-flow context and make the test fixture less readable).
+- **Type-check:** ✅ `mypy src` clean (40 source files).
+- **Logging:** Module emits two structured-log events: `stratified.axis_skipped` (per missing axis: `axis`, `reason`) and `stratified.degenerate_stratum` (per under-min-size or single-class stratum: `axis`, `value`, `reason`, `n_rows`, `n_pos` / `min_stratum_size`). Both at WARNING level — appropriate for "this stratum's metrics may not be trustworthy" signal that a reviewer wants visible without crashing the call.
+- **Comments:** 83-line module docstring with explicit "Sprint 4 prompt 4.2" anchor + business rationale + 10 trade-off bullets + cross-references. Each public method's docstring includes business context. Inline `# TODO(sprint-4.x)` at line 523 marks the MLflow integration point. Every non-obvious decision (the half-open amount buckets, the `id_01.notna()` probe rationale, the z-score sign convention) carries an inline comment.
+
+### 7. Design rationale (the heart of the audit)
+
+#### Justifications
+
+- **Why `id_01.notna()` as the identity-coverage probe:** CLAUDE.md §1 documents that only ~24% of transactions have device/identity data. Probing a single highest-non-null `id_*` column is reliable and keeps the identity-coverage signal isolated from device-type (which `DeviceType.notna()` would conflate). Choice tested by `test_identity_coverage_exactly_two_groups`.
+- **Why `min_stratum_size = 50`:** the smallest size where a 10% fraud rate gives expected n_pos = 5 — barely enough for AUC to be non-trivial. Below that, AUC = 1.0 on n=3 rows is meaningless noise that would discolour the heatmap. Pinned by `test_below_min_stratum_size_returns_nan_auc`.
+- **Why long-format DataFrame over wide-format:** 5 axes × ~3-5 strata per axis = 15-25 rows. Wide format would be ~17 rows × 35+ columns (one column per (axis, stratum_value, metric) triple) — unreadable. Long format lets the caller `groupby('stratum_axis')` and pivot at will. Mirrors `economic.py`'s cost-curve column convention.
+- **Why the heatmap z-score sign-flips cost columns:** uniformity. After the flip, "red = worse" works across all columns regardless of metric direction. The alternative (separate colormaps per metric type) would require the reader to context-switch between columns; the flipped-z-score lets a reviewer scan a single column and judge cells against each other directly.
+
+#### Consequences (positive + negative)
+
+| Dimension | Positive | Negative |
+|---|---|---|
+| Stratification axes | Five axes cover the four CLAUDE.md §1 levers (amount, product, device, identity) plus temporal drift; matches a senior fraud-team reviewer's deployment-review questions | Month axis requires caller-supplied series (Tier-5 parquet drops `timestamp`); fan-out across 4-5 axes per call is fixed (no caller-controlled subset) |
+| Heatmap interpretability | Cost-flipped z-score gives single-direction colour semantics; sample-size annotations let a reader judge cell trustworthiness at a glance | 17-row heatmaps push readability limits; `figsize` auto-sizes via `0.4 × n_rows + 1` but a frame with all 5 axes + many ProductCD values can produce a tall plot |
+| Skip-with-warning resilience | Tier-1-only or partial frames still produce partial output; reviewer-friendly | Silent skips can hide schema regressions; mitigated by the WARNING log line being structured and queryable |
+| Heatmap z-score sign convention | Prevents the "red is good" foot-gun for cost columns; uniform across heatmap | Relies on caller knowing which metrics in `metrics=(...)` are cost-typed. The `_COST_LIKE_METRICS` frozenset is documented but not user-extensible without a code change |
+| Test infrastructure | Synthetic four-axis fixture with independent biases; both isolated (`_amount_only_fixture`) and combined (`_small_fixture`) variants prevent gate-conflict | 38 tests is a lot of surface for one stratifier; future test-discipline audits should consider whether all branches are still load-bearing |
+
+#### Alternatives considered and rejected
+
+1. **Public per-axis methods** (`evaluate_by_amount_bucket`, etc.). Rejected: balloons the public surface with no flexibility win. The long-format frame is already filterable via `groupby('stratum_axis')`.
+2. **Wide-format DataFrame return.** Rejected: 35+ columns is unreadable; long-format is the standard tabular shape for per-stratum metrics.
+3. **`DeviceType.notna()` as identity probe.** Rejected: would conflate identity-coverage with device-type; smearing two signals masks both.
+4. **Drop single-class strata.** Rejected: a reviewer wants to see "this stratum had only positives" — dropping hides the skew. Cost is well-defined on a single class; only AUC/PR-AUC are NaN.
+5. **Per-cell AUC interaction heatmap (e.g., amount × device).** Rejected: spec is per-axis only; cross-axis interactions are a Sprint 4.x experiment with their own visual conventions.
+6. **Eager MLflow logging in `plot_heatmap`.** Rejected: would couple the plot module to MLflow's experiment lifecycle. The TODO at line 523 marks the integration point; the `evaluate()` DataFrame and `Axes` return are clean handoff points for a future MLflow-aware reporter.
+
+#### Trade-offs
+
+The 10 trade-offs in the module docstring (lines 25-71) are all realised in code and tested:
+
+- Stateless class wrapping a stateful primitive — confirmed.
+- Long-format DataFrame over wide-format — confirmed.
+- Single `evaluate` orchestrator + 5 private helpers — confirmed.
+- `id_01.notna()` as identity probe — confirmed; `_IDENTITY_PROBE_COL` constant.
+- Skip-with-warning on missing column — `WARNING(stratified.axis_skipped, ...)`.
+- Include single-class strata with NaN AUC/PR-AUC — confirmed; `_MIN_CLASSES_FOR_AUC`.
+- `min_stratum_size: int = 50` floor — confirmed; `_DEFAULT_MIN_STRATUM_SIZE`.
+- Heatmap z-score with cost-column sign-flip — confirmed; `_COST_LIKE_METRICS` frozenset + sign-flip at line 829.
+- Month axis as keyword arg, not derived — confirmed.
+- MLflow logging deferred to Sprint 4.x+ — `# TODO(sprint-4.x)` at line 523.
+
+#### Potential issues
+
+- **`np.nanstd` defaults to `ddof=0`** (population std, not sample). For the heatmap z-score, this is fine — the goal is "this stratum is far from the cross-stratum mean", not unbiased estimation. Documented implicitly via the test `test_z_score_for_heatmap_normalises_per_column` (which doesn't assert on ddof but pins the realised values).
+- **Single-finite-value column → all zeros.** If only one stratum produced a finite cost (e.g., others were NaN-degenerate), the std is undefined and `_z_score_for_heatmap` falls back to all zeros (neutral colour). Documented in the function docstring; tested by `test_heatmap_handles_single_finite_value_column`.
+- **`Settings.decision_threshold` coupling.** Tests using `StratifiedEvaluator()` no-args inherit whatever value `Settings.decision_threshold` carries — the 4.4 gap-fix pinned the one cost-sensitive test, but the broader pattern (env-coupled tests) is a Sprint 5+ test-discipline question.
+
+#### Scalability
+
+- **Per `evaluate` call:** 5 axes × per-axis row count (5 amount + 5 PCD + 3 device + 2 identity + 2 month = 17 strata in the typical case). Each stratum: one boolean-mask of `len(y_true)` + sklearn AUC/PR-AUC + one `compute_cost`. On the 92K test set, the call takes ~2 s.
+- **Per `plot_heatmap` call:** matplotlib `imshow` on a 17×3 ndarray; trivial. Cell-annotation loop is 51 `ax.text` calls; <100 ms.
+- **Memory footprint:** the 17-row long-format frame is ~5 KB pandas; the heatmap z-score data is 17×3×8 = 408 bytes. Negligible.
+- **Sprint-5 production-serving:** N/A — offline evaluation only. Per-segment thresholds are a Sprint 5 decision (would consume `EconomicCostModel.optimize_threshold` in a loop over strata).
+
+#### Reproducibility
+
+- **Deterministic axis ordering:** `_AXES` constant pins the order in the long-format frame; same inputs → same row order across runs.
+- **Deterministic per-axis stratum ordering:** sorted unique values for ProductCD/DeviceType/month; explicit bucket boundaries for amount; explicit two-stratum order for identity coverage.
+- **Stable z-score:** `np.nanmean` / `np.nanstd` are deterministic; the sign-flip is a constant-time lookup against `_COST_LIKE_METRICS`.
+- **Heatmap rendering:** matplotlib outputs are deterministic given the same input data + matplotlib version; the Agg backend is pinned by the test fixture for headless CI.
+- **Structured logging:** `stratified.axis_skipped` and `stratified.degenerate_stratum` events surface the realised parameters so a future audit can trace why a particular stratum was missing or degenerate.
+
+### 8. Gap-fills applied
+
+**None required for 4.2's source surface.** The implementation is spec-complete, well-tested, well-documented, and passes all gates.
+
+The 4 gap-fixes in this audit-and-gap-fill PR (`.env.example`, `configs/economic_defaults.yaml`, `.gitignore` allow-list, `CLAUDE.md` §13) are documented in the prompt 4.3 / 4.4 audits' §8 sections + the PR commit-message body. The 4.4 gap-fix that pinned `threshold=0.5` in `test_month_with_drift_has_higher_cost_per_txn` is documented in the 4.4 prompt-completion report's "Gap-fix" section; it is reaffirmed here as correctly scoped (verified in §5 above: the other no-args calls in `test_stratified.py` are threshold-free).
+
+### 9. Open follow-ons / Sprint 5+ candidates
+
+- **MLflow logging of `evaluate()` DataFrame and heatmap PNG** — TODO at line 523 marks the integration point. Sprint 4.x+ or 5.
+- **Cross-axis interactions** (e.g., amount × device cell-level AUC heatmap) — Sprint 4.x experiment.
+- **Per-segment thresholds** — would consume `EconomicCostModel.optimize_threshold` in a loop over strata. Sprint 5.
+- **Project-wide `Settings.*` test discipline audit** — the 4.4 gap-fix targeted one test; a wider sweep is Sprint 5+ scope.
+- **User-extensible `_COST_LIKE_METRICS`** — currently a hard-coded frozenset. If a future caller adds a new cost-typed metric (e.g., `precision_at_k_cost`), the colour direction will silently invert until `_COST_LIKE_METRICS` is updated. Could be promoted to a constructor kwarg if the use case emerges.
+- **Drift detection on stratified AUC** — Sprint 6 monitoring stack would compare per-stratum AUC across temporal windows.
+
+### Audit conclusion
+
+**4.2 is spec-complete, audit-clean, and production-ready.** All 38 tests pass, all gates green, the 4.4 gap-fix is correctly scoped (verified), and the heatmap z-score sign-convention invariant is documented + tested. The MLflow TODO at line 523 is a deliberate scope-deferral, not a gap. No code changes required. The 4.4 full-test-set heatmap (`reports/figures/economic_stratified_heatmap.png`, allow-listed in `.gitignore` as part of this PR's gap-fix #3) is the strongest possible empirical validation: 17 strata across the five axes, with the cost-flipped z-score showing per-segment skew that the global τ leaves on the table — the signal Sprint 5's per-segment optimisation will read from.

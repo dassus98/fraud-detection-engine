@@ -87,22 +87,35 @@ tn_cost_usd: 0
 # as configurable would invite cargo-cult overrides). Documented
 # here so the convention itself is auditable.
 
-decision_threshold: 0.5
-# Initial decision threshold (probability above which we block).
+decision_threshold: 0.080000
+# Cost-optimal decision threshold (probability above which we block).
 #
-# 0.5 is the placeholder value, NOT the production setting. Sprint
-# 4 will replace it with the cost-curve optimum from
-# `EconomicCostModel.optimize_threshold(...)`. The replacement
-# pathway is:
-#   1. Train Model A (Sprint 3.3.d, complete).
-#   2. Calibrate via `select_calibration_method` (Sprint 3.3.c, complete).
-#   3. Run `optimize_threshold` on the calibrated val probabilities
-#      (Sprint 4.1, complete).
-#   4. Confirm stability via `sensitivity_analysis` and the
-#      stratified per-segment evaluator (Sprint 4.1 / 4.2, complete).
-#   5. Write the resulting τ to `.env` and overwrite this entry's
-#      comment with a pointer to the run that produced it
-#      (Sprint 4.x or Sprint 5).
+# Realised value from Sprint 4.4's full-test-set economic evaluation
+# (`scripts/run_economic_evaluation.py`, run 2026-05-09 against
+# `data/processed/tier5_test.parquet`, 92,427 rows). Empirical optimum
+# 0.0800 lands one threshold-grid step (0.01) from the analytical
+# Bayes-decision limit τ* = fp_cost / (fp_cost + fraud_cost - tp_cost)
+# = 35 / (35 + 450 - 5) = 35/480 ≈ 0.0729 — empirical and theoretical
+# agree, the strongest empirical validation of the cost-optimisation
+# implementation.
+#
+# Realisation lineage:
+#   1. Train Model A — Sprint 3.3.d (`reports/model_a_training_report.md`).
+#   2. Calibrate via `select_calibration_method` — Sprint 3.3.c
+#      (isotonic; val log loss 0.291 → 0.109).
+#   3. Run `optimize_threshold` on calibrated test probabilities —
+#      Sprint 4.4 (`reports/economic_evaluation.md` §3 carries
+#      cost_per_txn at the optimum).
+#   4. Confirm stability via `sensitivity_analysis` — Sprint 4.4
+#      (spread = 0.0600 across the 125-cell ±20% grid; well under
+#      the CLAUDE.md §8 0.20 stability ceiling).
+#   5. Confirm per-segment behaviour via `StratifiedEvaluator` —
+#      Sprint 4.4 (`reports/figures/economic_stratified_heatmap.png`
+#      carries the 17-stratum z-score-normalised view).
+#
+# Backups: `.env.bak` carries the prior placeholder 0.5 for rollback;
+# Sprint 4.4's audit-and-gap-fill PR brings this YAML in line with
+# the realised value.
 
 # --- Sensitivity grid (informational only) ---------------------------
 #
