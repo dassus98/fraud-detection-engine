@@ -332,9 +332,20 @@ class TestPerAxisLogic:
         assert by_id.loc["has_identity", "auc"] > by_id.loc["no_identity", "auc"]
 
     def test_month_with_drift_has_higher_cost_per_txn(self) -> None:
-        """Gate (d): month=5 (noisy scores) has higher cost_per_txn than month=6 (clean)."""
+        """Gate (d): month=5 (noisy scores) has higher cost_per_txn than month=6 (clean).
+
+        Pins ``threshold=0.5`` explicitly to make this test independent
+        of ``Settings.decision_threshold`` — Sprint 4.4's
+        ``run_economic_evaluation.py`` mutates ``.env``'s
+        ``DECISION_THRESHOLD`` to the cost-optimal value (e.g. ~0.08
+        on the project's defaults). At the optimal-cost threshold
+        most predictions are positive on both noisy and clean strata,
+        which collapses the noise-vs-clean cost discrimination this
+        test asserts. Pinning 0.5 keeps the test deterministic
+        regardless of ``.env`` state.
+        """
         y, s, frame, month = _small_fixture()
-        out = StratifiedEvaluator().evaluate(y, s, frame, month=month)
+        out = StratifiedEvaluator(threshold=0.5).evaluate(y, s, frame, month=month)
         by_month = out[out["stratum_axis"] == "month"].set_index("stratum_value")
         assert by_month.loc["5", "cost_per_txn"] > by_month.loc["6", "cost_per_txn"]
 
