@@ -648,6 +648,19 @@ wheels = [
 ]
 
 [[package]]
+name = "fakeredis"
+version = "2.35.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "redis" },
+    { name = "sortedcontainers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/43/50/b748233c02fa77e5105238190cc9bb58b852eb1c8b1d0763230d3a5b745a/fakeredis-2.35.1.tar.gz", hash = "sha256:5bae5eba7b9d93cb968944ac40936373cf2397ff71667d4b595df65c3d2e413f", size = 189118, upload-time = "2026-04-12T17:05:58.539Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6f/27/b8b057a23f7777177e92d3a602fd866751b6b45014964548997e92e048fd/fakeredis-2.35.1-py3-none-any.whl", hash = "sha256:67d97e11f562b7870e11e5c30cf182270bfb2dd37f6707dba47cc6d91628d1b9", size = 129678, upload-time = "2026-04-12T17:05:56.86Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.115.6"
 source = { registry = "https://pypi.org/simple" }
@@ -785,6 +798,7 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "detect-secrets" },
+    { name = "fakeredis" },
     { name = "hypothesis" },
     { name = "ipykernel" },
     { name = "jupyter" },
@@ -812,6 +826,7 @@ requires-dist = [
     { name = "cleanlab", specifier = "==2.9.0" },
     { name = "click", specifier = "==8.1.8" },
     { name = "detect-secrets", marker = "extra == 'dev'", specifier = "==1.5.0" },
+    { name = "fakeredis", marker = "extra == 'dev'", specifier = ">=2.20" },
     { name = "fastapi", specifier = "==0.115.6" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = "==6.123.2" },
