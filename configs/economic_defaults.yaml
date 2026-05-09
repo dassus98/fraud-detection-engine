@@ -1,0 +1,114 @@
+# Economic-cost defaults for the fraud-decision threshold optimisation
+# (Sprint 4.1 EconomicCostModel + 4.2 StratifiedEvaluator).
+#
+# This file is documentation, NOT a runtime input. Settings reads cost
+# values from `.env` (or environment variables) at startup; this YAML
+# is the canonical record of where each number came from. When a value
+# in `.env` changes, update this file with the revised justification
+# and reference the consuming sprint's completion report.
+#
+# Source: CLAUDE.md §8 "Business-Logic Constants You Must Know".
+# Live runtime values: src/fraud_engine/config/settings.py:88-115.
+
+fraud_cost_usd: 450
+# Mean marginal cost of a missed fraud (false negative), in USD.
+#
+# Breakdown (per CLAUDE.md §8):
+#   $150 — average chargeback transaction value (card-not-present)
+#   $25  — chargeback fee paid to the issuer
+#   $75  — investigation / dispute-handling labour
+#   $50  — scheme penalty (Visa / Mastercard fines that scale with the
+#          merchant's chargeback ratio when it crosses programme
+#          thresholds)
+#   $150 — reputation / regulatory exposure (modelled as the
+#          expected-value cost of OSFI / FINTRAC scrutiny on a
+#          Canadian fintech's chargeback ratio; analogous regimes
+#          apply in the US under the OCC and in the UK under the FCA)
+#   ----
+#   $450  TOTAL
+#
+# Source category (no copyrighted text reproduced):
+#   - Industry medians for card-not-present losses, drawn from
+#     publicly-reported Federal Reserve Payments Studies and ACFE
+#     occupational-fraud reports.
+#   - Visa / Mastercard published interchange + scheme fee schedules
+#     (chargeback fee component).
+#   - OSFI guidance on operational-risk capital (Canadian fintech
+#     audience per CLAUDE.md §1).
+#
+# 2024-vintage figures, intentionally conservative-high so the
+# threshold optimisation favours catching fraud over avoiding
+# friction. Sensitivity is verified via a ±20 % grid (see
+# `EconomicCostModel.sensitivity_analysis`).
+
+fp_cost_usd: 35
+# Customer-friction cost of a false positive (blocking a legitimate
+# transaction), in USD.
+#
+# Breakdown (per CLAUDE.md §8):
+#   $15 — direct support contact cost (one CSR call, ~15 minutes of
+#         fully-loaded analyst time)
+#   $20 — expected churn cost = 5 % churn probability × $400 customer
+#         lifetime value (CLV)
+#   ----
+#   $35  TOTAL
+#
+# CLV assumption: this project's audience is Canadian / Latin
+# American fintechs (Wealthsimple, Mercury, RBC, Nubank — see
+# CLAUDE.md §1) where the typical user is a younger high-LTV
+# digital-banking customer; a $400 lifetime contribution is a
+# defensible mid-range estimate. A bank with materially different
+# CLV economics MUST override this value via `.env`.
+#
+# Source category: industry-standard CSR cost benchmarks, internal
+# CLV models from the comparable companies above. No copyrighted
+# text reproduced.
+
+tp_cost_usd: 5
+# Operational cost of a true positive (analyst review on a confirmed
+# fraud block), in USD.
+#
+# Breakdown: ~$5 ≈ 5 minutes of fully-loaded analyst cost on a
+# flagged transaction that turns out to be genuine fraud.
+#
+# Captured to keep the cost optimisation honest — over-blocking
+# still has a per-instance review cost even when the block is
+# correct. Without this term, the cost model would read
+# "more blocks are always free", pushing τ unrealistically low.
+
+tn_cost_usd: 0
+# True negatives are the desired no-op outcome.
+#
+# Zero by convention in fraud-ML so the cost surface collapses to
+# total = FN × fraud_cost + FP × fp_cost + TP × tp_cost.
+#
+# Held in code at `EconomicCostModel.__init__(tn_cost=0.0)` (no
+# Settings field — the convention is so universal that surfacing it
+# as configurable would invite cargo-cult overrides). Documented
+# here so the convention itself is auditable.
+
+decision_threshold: 0.5
+# Initial decision threshold (probability above which we block).
+#
+# 0.5 is the placeholder value, NOT the production setting. Sprint
+# 4 will replace it with the cost-curve optimum from
+# `EconomicCostModel.optimize_threshold(...)`. The replacement
+# pathway is:
+#   1. Train Model A (Sprint 3.3.d, complete).
+#   2. Calibrate via `select_calibration_method` (Sprint 3.3.c, complete).
+#   3. Run `optimize_threshold` on the calibrated val probabilities
+#      (Sprint 4.1, complete).
+#   4. Confirm stability via `sensitivity_analysis` and the
+#      stratified per-segment evaluator (Sprint 4.1 / 4.2, complete).
+#   5. Write the resulting τ to `.env` and overwrite this entry's
+#      comment with a pointer to the run that produced it
+#      (Sprint 4.x or Sprint 5).
+
+# --- Sensitivity grid (informational only) ---------------------------
+#
+# `EconomicCostModel.sensitivity_analysis` defaults to a ±20 %
+# symmetric grid per cost axis (CLAUDE.md §8: "decisions are stable
+# under ±20 % variation"). The multipliers are pinned in code at
+# `_DEFAULT_SENSITIVITY_MULTIPLIERS`; this entry is documentation
+# only, NOT consumed at runtime.
+sensitivity_multipliers: [0.80, 0.90, 1.00, 1.10, 1.20]
