@@ -16,8 +16,12 @@ LightGBM model + isotonic calibrator at startup, exposes
 `predict(features)` with calibrated probability + threshold-based
 decision, supports atomic mid-session model reload.
 
-Routes, SHAP integration, shadow mode, and prediction logging are
-populated by later 5.x prompts.
+Sprint 5 prompt 5.1.e: `ShapExplainer` — precomputed
+`shap.TreeExplainer` + `configs/reason_codes.yaml` mapping; populates
+`PredictionResponse.top_reasons` for the route handler.
+
+Routes, shadow mode, and prediction logging are populated by later
+5.x prompts.
 """
 
 from __future__ import annotations
@@ -41,10 +45,12 @@ from fraud_engine.api.schemas import (
     RequestMetadata,
     TransactionRequest,
 )
+from fraud_engine.api.shap_explainer import Contribution, ShapExplainer
 
 __all__ = [
     "Card4Literal",
     "Card6Literal",
+    "Contribution",
     "DecisionLiteral",
     "DependencyStatusLiteral",
     "FeatureService",
@@ -61,5 +67,6 @@ __all__ = [
     "ReasonDirectionLiteral",
     "RedisFeatureStore",
     "RequestMetadata",
+    "ShapExplainer",
     "TransactionRequest",
 ]

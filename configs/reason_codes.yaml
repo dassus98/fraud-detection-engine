@@ -1,0 +1,134 @@
+# Reason-code mapping for `ShapExplainer.map_to_reasons` (Sprint 5.1.e).
+#
+# Each entry maps a model feature name to a pair of human-readable
+# strings — one for the "high" direction (SHAP value > 0, increases
+# risk) and one for the "low" direction (SHAP value < 0, decreases
+# risk). `null` for either direction means "drop this contribution
+# from the user-facing reasons list" — useful when one direction has
+# no business-meaningful interpretation (e.g. `is_coldstart_card1.low`
+# is just "the customer's card has been seen before"; not worth
+# emitting).
+#
+# Coverage: 24 entries against 743 model features. By design the YAML
+# does NOT cover Vesta-anonymised V/C/D/M features (no published
+# semantics) or `is_null_*` indicators (raw missingness; uninformative
+# to a user). When a top-3 contribution lands on an unmapped feature,
+# `map_to_reasons` drops it silently — the route handler will return
+# fewer than 3 reasons, which is correct behaviour.
+#
+# Tier coverage (24 total):
+#   Tier-1 (5):  amount/time/email features.
+#   Tier-2 (3):  velocity counters.
+#   Tier-3 (6):  behavioural deviations.
+#   Tier-4 (5):  EWM decay-velocity.
+#   Tier-5 (5):  graph features.
+#
+# All keys MUST exist in the model's `feature_names_` list; the
+# `TestReasonCodesYaml::test_all_keys_in_manifest` test enforces this.
+# Edits should be cleared with that test before commit.
+
+# --- Tier-1: real-time features computed from the request payload ---
+
+log_amount:
+  high: "Transaction amount is unusually large for this customer profile"
+  low: "Transaction amount is on the low end of typical spending"
+
+hour_of_day:
+  high: "Transaction occurred at an unusual time of day"
+  low: null
+
+P_emaildomain_is_free:
+  high: "Purchaser is using a free email provider, which carries elevated fraud rates"
+  low: null
+
+P_emaildomain_is_disposable:
+  high: "Purchaser email domain is a known disposable / throwaway provider"
+  low: null
+
+R_emaildomain_is_free:
+  high: "Recipient is using a free email provider, which carries elevated fraud rates"
+  low: null
+
+# --- Tier-2: entity-keyed velocity counters ---
+
+card1_velocity_24h:
+  high: "Unusually high transaction frequency on this card in the last 24 hours"
+  low: null
+
+card1_velocity_7d:
+  high: "Unusually high transaction frequency on this card in the last 7 days"
+  low: null
+
+addr1_velocity_24h:
+  high: "Unusually high transaction frequency from this billing address in the last 24 hours"
+  low: null
+
+# --- Tier-3: behavioural deviations from the customer's baseline ---
+
+amt_zscore_vs_card1_history:
+  high: "Transaction amount unusual compared to your typical spending"
+  low: null
+
+time_since_last_txn_zscore:
+  high: "Transaction timing unusual compared to your typical activity pattern"
+  low: null
+
+addr_change_flag:
+  high: "Transaction is from an address not previously associated with this card"
+  low: null
+
+device_change_flag:
+  high: "Transaction is from a device not previously associated with this account"
+  low: null
+
+hour_deviation:
+  high: "Transaction occurred at an unusual hour for this customer"
+  low: null
+
+is_coldstart_card1:
+  high: "Card has very limited transaction history available"
+  low: null
+
+# --- Tier-4: EWM decay-velocity (multi-timescale) ---
+
+card1_v_ewm_lambda_0.05:
+  high: "Sustained unusual activity on this card over the last several days"
+  low: null
+
+card1_fraud_v_ewm_lambda_0.05:
+  high: "This card has recent confirmed-fraud activity in its history"
+  low: null
+
+card1_v_ewm_lambda_0.5:
+  high: "Sustained unusual activity on this card in the last several hours"
+  low: null
+
+card1_fraud_v_ewm_lambda_0.5:
+  high: "This card has very recent confirmed-fraud activity"
+  low: null
+
+addr1_v_ewm_lambda_0.05:
+  high: "Sustained unusual activity from this billing address over the last several days"
+  low: null
+
+# --- Tier-5: transaction-graph features ---
+
+pagerank_score:
+  high: "This transaction is part of a densely connected entity cluster, a common fraud-ring signature"
+  low: null
+
+fraud_neighbor_rate:
+  high: "Entities in this transaction share connections with previously confirmed fraud"
+  low: null
+
+connected_component_size:
+  high: "This transaction is part of an unusually large entity cluster"
+  low: null
+
+entity_degree_card1:
+  high: "This card is connected to many other entities, exceeding the typical pattern"
+  low: null
+
+clustering_coefficient:
+  high: "The entity-graph neighbourhood for this transaction shows tight interconnection"
+  low: null
