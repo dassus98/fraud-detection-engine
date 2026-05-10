@@ -224,6 +224,20 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- shadow mode (Sprint 5.2.b) --------------------------------
+    shadow_enabled: bool = Field(
+        default=False,
+        description=(
+            "If True, the API lifespan loads the FraudNet challenger "
+            "(Model B) and the /predict route fires async shadow "
+            "predictions for champion-vs-challenger comparison. The "
+            "shadow score is logged via structlog with request_id "
+            "correlation; it never affects the served decision and "
+            "never blocks the response. Default False — opt-in for "
+            "production rollouts. Env var: SHADOW_ENABLED=true|false."
+        ),
+    )
+
     # --- decisioning -----------------------------------------------
     decision_threshold: float = Field(
         default=0.5,

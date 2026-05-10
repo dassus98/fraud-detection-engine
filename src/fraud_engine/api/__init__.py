@@ -26,6 +26,7 @@ Routes, shadow mode, and prediction logging are populated by later
 
 from __future__ import annotations
 
+from fraud_engine.api.circuit_breaker import CircuitBreaker, CircuitBreakerStateLiteral
 from fraud_engine.api.feature_service import FeatureService, FeatureVector
 from fraud_engine.api.inference import InferenceResult, InferenceService
 from fraud_engine.api.prediction_logger import PredictionLogger
@@ -46,11 +47,14 @@ from fraud_engine.api.schemas import (
     RequestMetadata,
     TransactionRequest,
 )
+from fraud_engine.api.shadow import ShadowService
 from fraud_engine.api.shap_explainer import Contribution, ShapExplainer
 
 __all__ = [
     "Card4Literal",
     "Card6Literal",
+    "CircuitBreaker",
+    "CircuitBreakerStateLiteral",
     "Contribution",
     "DecisionLiteral",
     "DependencyStatusLiteral",
@@ -69,6 +73,7 @@ __all__ = [
     "ReasonDirectionLiteral",
     "RedisFeatureStore",
     "RequestMetadata",
+    "ShadowService",
     "ShapExplainer",
     "TransactionRequest",
 ]
