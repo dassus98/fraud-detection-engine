@@ -161,7 +161,6 @@ from uuid import UUID, uuid4
 import asyncpg  # type: ignore[import-untyped]  # asyncpg ships no type stubs (PEP-561 absent)
 import redis.exceptions
 from fastapi import FastAPI, Request, Response, status
-from prometheus_client import Histogram
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from fraud_engine.api.feature_service import FeatureService
@@ -177,6 +176,17 @@ from fraud_engine.api.schemas import (
 from fraud_engine.api.shadow import ShadowService
 from fraud_engine.api.shap_explainer import ShapExplainer
 from fraud_engine.config.settings import Settings, get_settings
+from fraud_engine.monitoring import (
+    DEGRADED_MODE_TOTAL,
+    DEPENDENCY_UP,
+    FEATURE_FETCH_SECONDS,
+    INFERENCE_SECONDS,
+    MODEL_INFO,
+    PREDICT_TOTAL_SECONDS,
+    PREDICTION_SCORE,
+    PREDICTIONS_TOTAL,
+    SHAP_SECONDS,
+)
 from fraud_engine.utils.logging import (
     bind_request_id,
     get_logger,
@@ -194,51 +204,20 @@ _SERVICE_VERSION: Final[str] = _pkg_version("fraud-engine")
 # `PredictionResponse.top_reasons` at 10; we request the same so the
 # explainer doesn't have to think about it.
 _TOP_K_REASONS: Final[int] = 10
-# Histogram buckets covering typical sub-10ms case, the 100ms budget
-# gate (CLAUDE.md §3), and a tail. Buckets are in seconds — Prometheus
-# convention, NOT milliseconds.
-_LATENCY_BUCKETS: Final[tuple[float, ...]] = (
-    0.005,
-    0.010,
-    0.025,
-    0.050,
-    0.100,
-    0.250,
-)
 
 _logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------
-# Per-stage Prometheus histograms.
+# Prometheus instrumentation.
 #
-# Registered against the global `prometheus_client.REGISTRY` so they
-# appear in the same `/metrics` scrape that the
-# `prometheus-fastapi-instrumentator` lib exposes. The four stages
-# mirror the request flow exactly (feature fetch → inference → SHAP
-# → total).
+# All custom metrics live in `fraud_engine.monitoring.prometheus_metrics`
+# (Sprint 6.1.a) — single source of truth.  The 4 per-stage latency
+# histograms (FEATURE_FETCH_SECONDS / INFERENCE_SECONDS / SHAP_SECONDS /
+# PREDICT_TOTAL_SECONDS) lived inline here pre-6.1.a; they are now
+# imported above with names + buckets unchanged so the existing
+# `/metrics` text format and Grafana dashboards keep working.
 # ---------------------------------------------------------------------
-
-FEATURE_FETCH_SECONDS: Final[Histogram] = Histogram(
-    "fraud_engine_feature_fetch_seconds",
-    "Time to fetch features (Tier-1 inline + Redis MGET + Postgres probe).",
-    buckets=_LATENCY_BUCKETS,
-)
-INFERENCE_SECONDS: Final[Histogram] = Histogram(
-    "fraud_engine_inference_seconds",
-    "Time for LightGBM predict_proba + isotonic calibration.",
-    buckets=_LATENCY_BUCKETS,
-)
-SHAP_SECONDS: Final[Histogram] = Histogram(
-    "fraud_engine_shap_seconds",
-    "Time for SHAP top-k contributions + reason mapping.",
-    buckets=_LATENCY_BUCKETS,
-)
-PREDICT_TOTAL_SECONDS: Final[Histogram] = Histogram(
-    "fraud_engine_predict_total_seconds",
-    "End-to-end /predict latency (excludes network round-trip).",
-    buckets=_LATENCY_BUCKETS,
-)
 
 
 # ---------------------------------------------------------------------
@@ -281,7 +260,7 @@ class AppState:
 # ---------------------------------------------------------------------
 
 
-def _make_lifespan(
+def _make_lifespan(  # noqa: PLR0915 — the lifespan is the API's wiring point; chopping it into helpers for a statement-count rule pushes complexity around without reducing it. Sprint 6.1.a added 5 dependency_up gauge updates that nudged the count past 50.
     settings_override: Settings | None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     """Build a lifespan that closes over `settings_override`.
@@ -301,7 +280,7 @@ def _make_lifespan(
     """
 
     @asynccontextmanager
-    async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def _lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: PLR0915 — see _make_lifespan rationale; the inner closure carries the same wiring concentration.
         """Start: load model artefacts (fail-fast); connect dependencies (degrade-warn)."""
         settings = settings_override if settings_override is not None else get_settings()
 
@@ -367,13 +346,20 @@ def _make_lifespan(
         # only auto-connects when it owns the store). Connect both here
         # under one try/except so a single Redis-down or Postgres-down
         # outage logs one warning, not two.
+        # The dependency_up gauge tracks per-component health for the
+        # Sprint-6 dashboards: 1 if the component connected, 0 otherwise.
+        # Set in the connect path so an operator's first scrape after
+        # startup reflects reality immediately, not on the first /ready
+        # poll.
         try:
             await redis_store.connect()
+            DEPENDENCY_UP.labels(component="redis").set(1)
         except (
             redis.exceptions.ConnectionError,
             redis.exceptions.RedisError,
             OSError,
         ) as exc:
+            DEPENDENCY_UP.labels(component="redis").set(0)
             _logger.warning(
                 "lifespan.redis_unreachable",
                 error_type=type(exc).__name__,
@@ -385,6 +371,7 @@ def _make_lifespan(
             # caller-managed). Either Postgres is up → succeeds, or
             # `asyncpg.create_pool()` raises here.
             await feature_service.connect()
+            DEPENDENCY_UP.labels(component="postgres").set(1)
         except (
             asyncpg.PostgresError,
             ConnectionRefusedError,
@@ -392,11 +379,16 @@ def _make_lifespan(
             RuntimeError,
             TimeoutError,
         ) as exc:
+            DEPENDENCY_UP.labels(component="postgres").set(0)
             _logger.warning(
                 "lifespan.postgres_unreachable",
                 error_type=type(exc).__name__,
                 detail=str(exc),
             )
+
+        # Model is loaded fail-fast above (Step 1) — if we got here, the
+        # joblib + manifest deserialised successfully.
+        DEPENDENCY_UP.labels(component="model").set(1)
 
         # Step 4: optional shadow service (Sprint 5.2.b). Loaded only
         # when Settings.shadow_enabled is True. Degrade-warns on load
@@ -661,6 +653,14 @@ def _register_routes(app: FastAPI) -> None:
         except RuntimeError:
             checks["model"] = "unreachable"
 
+        # Refresh the Sprint-6.1.a dependency_up gauges from the live
+        # probe results so a recovered Redis/Postgres flips back to 1
+        # the next scrape after `/ready` is polled.  Anything the probe
+        # can name we set; "ok" → 1, anything else (degraded /
+        # unreachable) → 0 (binary semantics for a health gauge).
+        for component, status_value in checks.items():
+            DEPENDENCY_UP.labels(component=component).set(1 if status_value == "ok" else 0)
+
         all_ok = all(v == "ok" for v in checks.values())
         if not all_ok:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -754,6 +754,18 @@ def _register_routes(app: FastAPI) -> None:
                 champion_score=inf.probability,
                 champion_decision=inf.decision,
             )
+
+        # Sprint 6.1.a Prometheus surface — increments AFTER the response
+        # is constructed so a downstream KeyError can't poison the
+        # counter (we count served predictions, not attempted ones).
+        # All labels are bounded-cardinality (decision ∈ {block, allow},
+        # model_version is a SHA-256 hex with ≤2 series per process
+        # lifetime); see prometheus_metrics.py Decision 4.
+        PREDICTIONS_TOTAL.labels(decision=inf.decision).inc()
+        PREDICTION_SCORE.observe(inf.probability)
+        if feature_vector.degraded_mode:
+            DEGRADED_MODE_TOTAL.inc()
+        MODEL_INFO.labels(model_version=inf.model_version).set(1)
 
         return PredictionResponse(
             txn_id=req.TransactionID,

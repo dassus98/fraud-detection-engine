@@ -123,6 +123,7 @@ from fraud_engine.api.circuit_breaker import CircuitBreaker
 from fraud_engine.api.schemas import DecisionLiteral
 from fraud_engine.config.settings import Settings, get_settings
 from fraud_engine.models.neural_model import FraudNetModel
+from fraud_engine.monitoring import SHADOW_TOTAL, set_shadow_breaker_state
 from fraud_engine.utils.logging import get_logger, log_call
 
 # ---------------------------------------------------------------------
@@ -390,6 +391,13 @@ class ShadowService:
                 breaker_state=self._breaker.state,
                 consecutive_failures=self._breaker.consecutive_failures,
             )
+            # Sprint 6.1.a: count the skip + reflect the (possibly
+            # transitioned to half_open) breaker state.  `can_proceed`
+            # may flip OPEN → HALF_OPEN after the cooldown elapses, so
+            # the gauge update here keeps the dashboard in sync with
+            # the live breaker state without needing a separate poll.
+            SHADOW_TOTAL.labels(event="breaker_open_skip").inc()
+            set_shadow_breaker_state(self._breaker.state)
             return
         task = asyncio.create_task(
             self._score_one(features, request_id, champion_score, champion_decision)
@@ -431,6 +439,11 @@ class ShadowService:
             duration_ms = (time.perf_counter() - t0) * 1000.0
 
             self._breaker.record_success()
+            # Sprint 6.1.a: count the success + reflect the (now-CLOSED)
+            # breaker state. record_success() always closes the breaker
+            # regardless of prior state.
+            SHADOW_TOTAL.labels(event="scored").inc()
+            set_shadow_breaker_state(self._breaker.state)
 
             # Compute decision agreement when champion_decision provided.
             agree_decision: bool | None = None
@@ -455,6 +468,11 @@ class ShadowService:
         except (RuntimeError, ValueError, TypeError, OSError) as exc:
             # Shadow is best-effort. Don't crash the event loop.
             self._breaker.record_failure()
+            # Sprint 6.1.a: count the failure + reflect the (possibly
+            # now-OPEN) breaker state. record_failure() trips OPEN once
+            # the threshold is crossed; the gauge follows.
+            SHADOW_TOTAL.labels(event="failed").inc()
+            set_shadow_breaker_state(self._breaker.state)
             _logger.warning(
                 "shadow.failed",
                 request_id=request_id,
