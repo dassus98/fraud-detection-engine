@@ -35,13 +35,23 @@ from fraud_engine.evaluation.calibration import (
     select_calibration_method,
 )
 from fraud_engine.evaluation.economic import EconomicCostModel
+from fraud_engine.evaluation.shadow_compare import (
+    ComparisonReport,
+    EconomicCosts,
+    PromotionVerdict,
+    ShadowComparison,
+)
 from fraud_engine.evaluation.stratified import StratifiedEvaluator
 
 __all__ = [
     "Calibrator",
+    "ComparisonReport",
     "EconomicCostModel",
+    "EconomicCosts",
     "IsotonicCalibrator",
     "PlattScaler",
+    "PromotionVerdict",
+    "ShadowComparison",
     "StratifiedEvaluator",
     "brier_score",
     "expected_calibration_error",
