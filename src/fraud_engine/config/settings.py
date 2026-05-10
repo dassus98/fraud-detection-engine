@@ -295,6 +295,73 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- monitoring (Sprint 6.1.c) ---------------------------------
+    performance_window_size: int = Field(
+        default=1000,
+        ge=100,
+        description=(
+            "Hint for caller-side rolling-window size (# predictions). "
+            "PerformanceMonitor itself is stateless — caller slices the "
+            "most-recent N labelled predictions and hands the DataFrame "
+            "in. Default 1000 balances statistical stability vs "
+            "responsiveness; larger windows (10K) smooth noise but "
+            "delay detection of abrupt drops."
+        ),
+    )
+    performance_degradation_threshold: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Fractional degradation threshold for performance alerts. "
+            "Default 0.05 = 5%; fires when (baseline - current) / "
+            "baseline > threshold (sign-flipped for cost). Env var: "
+            "PERFORMANCE_DEGRADATION_THRESHOLD=0.05."
+        ),
+    )
+    performance_alert_log_dir: Path = Field(
+        default=_PROJECT_ROOT / "logs" / "performance",
+        description=(
+            "Root for per-run performance-alert JSONL files: each "
+            "PerformanceMonitor.check_and_alert run writes to "
+            "{performance_alert_log_dir}/{run_id}/performance_alerts.jsonl. "
+            "Mirrors logs/drift/{run_id}/ convention. Gitignored."
+        ),
+    )
+    performance_training_auc: float = Field(
+        default=0.8281,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Baseline ROC-AUC from training (Sprint 3 validation set, "
+            "from models/sprint3/lightgbm_model_manifest.json:best_score). "
+            "Operator updates on each model retrain. Env var: "
+            "PERFORMANCE_TRAINING_AUC=0.8281."
+        ),
+    )
+    performance_training_auc_pr: float = Field(
+        default=0.50,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Baseline PR-AUC (average_precision_score) from training. "
+            "No machine-readable artefact yet — operator-curated; "
+            "default 0.50 is a placeholder a Sprint 6.x housekeeping "
+            "PR will retrofit by extending the model manifest."
+        ),
+    )
+    performance_training_cost: float = Field(
+        default=0.0,
+        ge=0.0,
+        description=(
+            "Baseline total economic cost (USD) from training validation "
+            "set. Default 0.0 disables cost alerts (a non-zero baseline "
+            "is required for fractional-degradation comparison). "
+            "Operator-curated from EconomicCostModel.optimize_threshold "
+            "output once the value lands in a machine-readable artefact."
+        ),
+    )
+
     # --- temporal split (Sprint 1 onwards) --------------------------
     # IEEE-CIS does not ship a calendar-anchored TransactionDT — Kaggle
     # publishes seconds since an anonymised reference. 2017-12-01 UTC
@@ -367,7 +434,12 @@ class Settings(BaseSettings):
         return value
 
     @field_validator(
-        "data_dir", "models_dir", "logs_dir", "drift_baseline_path", "drift_alert_log_dir"
+        "data_dir",
+        "models_dir",
+        "logs_dir",
+        "drift_baseline_path",
+        "drift_alert_log_dir",
+        "performance_alert_log_dir",
     )
     @classmethod
     def _resolve_relative_to_project_root(cls, value: Path) -> Path:
