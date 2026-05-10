@@ -10,11 +10,16 @@ re-import the module).
 Sprint 6.1.b: adds `DriftMonitor` + `DriftBaselineBuilder` for offline
 PSI-based drift detection on production features against a training
 baseline.
+
+Sprint 6.1.c: adds `PerformanceMonitor` for offline rolling AUC / AUC-PR /
+economic-cost monitoring against a training baseline, with alerting on
+degradations >5%.
 """
 
 from __future__ import annotations
 
 from fraud_engine.monitoring.drift import DriftBaselineBuilder, DriftMonitor
+from fraud_engine.monitoring.performance_monitor import PerformanceMonitor
 from fraud_engine.monitoring.prometheus_metrics import (
     DECISION_LABELS,
     DEGRADED_MODE_TOTAL,
@@ -56,5 +61,6 @@ __all__ = [
     "SHAP_SECONDS",
     "DriftBaselineBuilder",
     "DriftMonitor",
+    "PerformanceMonitor",
     "set_shadow_breaker_state",
 ]
