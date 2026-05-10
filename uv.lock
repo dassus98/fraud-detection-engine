@@ -159,6 +159,18 @@ wheels = [
 ]
 
 [[package]]
+name = "asgi-lifespan"
+version = "2.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sniffio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6a/da/e7908b54e0f8043725a990bf625f2041ecf6bfe8eb7b19407f1c00b630f7/asgi-lifespan-2.1.0.tar.gz", hash = "sha256:5e2effaf0bfe39829cf2d64e7ecc47c7d86d676a6599f7afba378c31f5e3a308", size = 15627, upload-time = "2023-03-28T17:35:49.126Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2f/f5/c36551e93acba41a59939ae6a0fb77ddb3f2e8e8caa716410c65f7341f72/asgi_lifespan-2.1.0-py3-none-any.whl", hash = "sha256:ed840706680e28428c01e14afb3875d7d76d3206f3d5b2f2294e059b5c23804f", size = 10895, upload-time = "2023-03-28T17:35:47.772Z" },
+]
+
+[[package]]
 name = "asttokens"
 version = "3.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -778,6 +790,7 @@ dependencies = [
     { name = "pandas" },
     { name = "pandera", extra = ["io"] },
     { name = "prometheus-client" },
+    { name = "prometheus-fastapi-instrumentator" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -797,6 +810,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "asgi-lifespan" },
     { name = "detect-secrets" },
     { name = "fakeredis" },
     { name = "hypothesis" },
@@ -822,6 +836,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "asgi-lifespan", marker = "extra == 'dev'", specifier = ">=2.1" },
     { name = "asyncpg", specifier = "==0.30.0" },
     { name = "cleanlab", specifier = "==2.9.0" },
     { name = "click", specifier = "==8.1.8" },
@@ -847,6 +862,7 @@ requires-dist = [
     { name = "pandera", extras = ["io"], specifier = "==0.22.1" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = "==4.0.1" },
     { name = "prometheus-client", specifier = "==0.21.1" },
+    { name = "prometheus-fastapi-instrumentator", specifier = "==7.0.2" },
     { name = "pyarrow", specifier = "==19.0.0" },
     { name = "pydantic", specifier = "==2.10.4" },
     { name = "pydantic-settings", specifier = "==2.7.1" },
@@ -2495,6 +2511,19 @@ wheels = [
 ]
 
 [[package]]
+name = "prometheus-fastapi-instrumentator"
+version = "7.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "prometheus-client" },
+    { name = "starlette" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c4/01/e3ccb464ba9bf6c001ad85652e6fc7e63098c2685275a682cabc8e7871b8/prometheus_fastapi_instrumentator-7.0.2.tar.gz", hash = "sha256:8a4d8fb13dbe19d2882ac6af9ce236e4e1f98dc48e3fa44fe88d8e23ac3c953f", size = 19844, upload-time = "2025-01-14T19:36:03.347Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f1/f7/a67e804853d05b3f1f5def0ebd662b9f48dbcfe0b452f0aa5d4c183a6f86/prometheus_fastapi_instrumentator-7.0.2-py3-none-any.whl", hash = "sha256:975e39992acb7a112758ff13ba95317e6c54d1bbf605f9156f31ac9f2800c32d", size = 18998, upload-time = "2025-01-14T19:36:02.192Z" },
+]
+
+[[package]]
 name = "prompt-toolkit"
 version = "3.0.52"
 source = { registry = "https://pypi.org/simple" }
@@ -3253,6 +3282,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/1f/ea/49c993d6dfdd7338c9b1000a0f36817ed7ec84577ae2e52f890d1a4ff909/smmap-5.0.3.tar.gz", hash = "sha256:4d9debb8b99007ae47165abc08670bd74cb74b5227dda7f643eccc4e9eb5642c", size = 22506, upload-time = "2026-03-09T03:43:26.1Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/d4/59e74daffcb57a07668852eeeb6035af9f32cbfd7a1d2511f17d2fe6a738/smmap-5.0.3-py3-none-any.whl", hash = "sha256:c106e05d5a61449cf6ba9a1e650227ecfb141590d2a98412103ff35d89fc7b2f", size = 24390, upload-time = "2026-03-09T03:43:24.361Z" },
+]
+
+[[package]]
+name = "sniffio"
+version = "1.3.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
 ]
 
 [[package]]

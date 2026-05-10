@@ -50,6 +50,10 @@ dependencies = [
   "asyncpg==0.30.0",
   # --- monitoring ---
   "prometheus-client==0.21.1",
+  # 5.1.f: instrument FastAPI with standard HTTP histograms; our custom
+  # per-stage histograms register against the same global REGISTRY and
+  # appear in the same /metrics scrape that this lib exposes.
+  "prometheus-fastapi-instrumentator==7.0.2",
   "mlflow==3.11.1",
   # --- data acquisition ---
   "kaggle==1.6.17",
@@ -79,6 +83,11 @@ dev = [
   # still hits real Redis when reachable. Pin >=2.20 (current 2.x
   # stable line; API surface stable).
   "fakeredis>=2.20",
+  # Sprint 5.1.f: fires FastAPI lifespan events under
+  # `httpx.AsyncClient` + `ASGITransport(app)`. Without it, the
+  # async test client skips `lifespan` startup/shutdown — the
+  # integration test would call routes against an un-initialised app.
+  "asgi-lifespan>=2.1",
 ]
 
 [tool.hatch.build.targets.wheel]
