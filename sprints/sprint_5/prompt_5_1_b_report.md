@@ -240,3 +240,91 @@ Verification passed. Ready for John to commit on `sprint-5/prompt-5-1-b-redis-st
 ```
 5.1.b: RedisFeatureStore (async pool + MGET + per-feature TTL via glob patterns)
 ```
+
+---
+
+## Re-verification — sprint-5-era (2026-05-09)
+
+**Date:** 2026-05-09
+**Branch:** `sprint-5/prompt-5-1-b-redis-store-reverification` (off `main` @ `7f6b016` — post 0.3.d-re-verify merge)
+**Status:** Deferred Docker-Redis gate closed; all 5 verification commands PASS.
+
+### Why this re-verification
+
+The original audit (above) explicitly listed two deferred items in the spec-vs-actual table and Decision #2 (Trade-offs):
+
+1. `docker compose -f docker-compose.dev.yml up -d redis` — could not run because Docker wasn't installed.
+2. The 3 integration tests in `tests/integration/test_redis_store_integration.py` — marked `SKIPPED` with `pytest.skip` reason `"Redis unreachable at redis://localhost:6379/0: Error 111 connecting to localhost:6379. Connect call failed ('127.0.0.1', 6379)."`
+
+Docker Engine 29.4.3 is now installed in WSL Ubuntu (verified working earlier today; see PR #52 + PR #53 for the install-and-bootstrap precedents). The `fraud-redis` container is currently `Up (healthy)` on `127.0.0.1:6379` with `redis_version:7.4.9`. This append closes the deferred gate by running the spec command + the 3 integration tests against real Redis, plus 3 wire-format probes that empirically validate design decisions documented in the module docstring but never tested against the production wire protocol.
+
+Mirrors the audit-and-gap-fill pattern from PR #52 (0.1.c re-verify) and PR #53 (0.3.d re-verify): preserves the 2026-05-09 audit text verbatim above, adds a dated re-verification section here.
+
+### Spec verification — all 5 PASS
+
+| Gate | Original status | Re-verification status |
+|---|---|---|
+| `docker compose -f docker-compose.dev.yml up -d redis` | "bash: docker: command not found" | **`Container fraud-redis Running`** (idempotent against a container already up from the 0.3.d gauntlet) |
+| `tests/integration/.../test_real_redis_round_trip` | SKIPPED | **PASSED** |
+| `tests/integration/.../test_real_redis_mget_with_missing` | SKIPPED | **PASSED** |
+| `tests/integration/.../test_real_redis_ttl_expiry` | SKIPPED | **PASSED** |
+| `uv run pytest tests/unit/test_redis_store.py -v` (regression check) | 63 passed in 3.97 s | **63 passed in 6.31 s** (matches; fakeredis path unchanged) |
+
+**Aggregate integration tests:** 3 skipped in 0.25 s → **3 passed in 5.54 s**.
+
+### Bonus evidence — design decisions empirically validated against real Redis
+
+Three claims in the original docstring + Decision #1/#2/#4 had never been round-tripped through real Redis. They are now:
+
+| Decision | Original claim | Re-verification evidence |
+|---|---|---|
+| #1 — JSON over msgpack | "human-readable under `redis-cli MONITOR` for incident triage" | `docker exec fraud-redis redis-cli GET feat:card1:wire_probe:card1_v_ewm_lambda_0.05` returns the canonical JSON `{"last_t": 13046400, "v": 1.25, "fraud_v": 0.0}` — confirmed readable |
+| #1 — Flat-key MGET (NOT hash-per-entity) | implicit ("Hash-per-entity HMGET refactor — flat-key MGET fits the budget") | `redis-cli TYPE feat:card1:wire_probe:card1_v_ewm_lambda_0.05` returns `string` — wire format matches design |
+| #4 — Pool sizing (50 slots × ~30 ms ≈ 1650 RPS) | docstring estimate, never measured | Live structured-log line `RedisFeatureStore.get_multi.done` shows `duration_ms: 0.762` for a 3-key MGET — **42× faster** than the docstring's per-MGET worst-case-network estimate. Loopback-Docker is much hotter than the cross-network case the estimate assumed; pool sizing is comfortable. |
+| TTL config (YAML pattern → wire-time TTL) | claim never round-tripped | Live `redis-cli TTL` returns: `card1_velocity_24h` → 86400 s (matches `*_velocity_24h` → 1d), `card1_v_ewm_lambda_0.05` → 604798 s (matches `*_v_ewm_lambda_*` → 7d), `card1_amt_mean_30d` → 2592000 s (matches `*_amt_*_30d` → 30d). Exact pattern-match-wins behaviour, end-to-end. |
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `sprints/sprint_5/prompt_5_1_b_report.md` | append "Re-verification — sprint-5-era (2026-05-09)" section (this section; preserves 2026-05-09 audit text above) |
+
+**No changes** to `src/fraud_engine/api/redis_store.py` (513 LOC, already production-quality), `tests/unit/test_redis_store.py` (580 LOC, 63 tests), `tests/integration/test_redis_store_integration.py` (176 LOC, 3 tests — already correctly designed with `pytest.skip`-if-unreachable), `configs/redis_feature_store.yaml` (73 LOC), `docker-compose.dev.yml`, `.env.example`, or `CLAUDE.md` §13.
+
+### Notable points
+
+1. **The deferred gate is closed.** Decision #2's "fakeredis vs real-Redis behavioural drift" catch-all is now exercised — and no drift detected. The integration tests confirm bit-exact round-trip equality for int (`7`), nested dict (`{"last_t": 13046400, "v": 1.25, "fraud_v": 0.0}`), and float (`145.67`) payloads, plus correct `None`-on-missing semantics for MGET, plus real-clock TTL expiry within the 1.5 s buffer.
+2. **JSON readability empirically validated** (Decision #1). `redis-cli GET` shows clean, indent-free JSON — exactly the on-call triage surface the trade-off promised. A future migration to msgpack would lose this.
+3. **Pool latency assumption was conservative.** The docstring's `~30 ms per MGET` is a worst-case-network estimate; the loopback-Docker reality is `~0.762 ms` for a 3-key MGET. The 50-slot pool can sustain far more than the originally-claimed 1650 RPS in this deployment shape, leaving generous headroom for the project's economic-eval baseline (~0.4 RPS sustained).
+4. **TTL config wire-time validation.** Three different feature names, three different glob patterns, three different TTLs — all match the YAML to the second. The `fnmatch.fnmatch` first-match-wins semantic Decision #1 picked behaves exactly as designed when tested against the real Redis clock.
+5. **5.1.c / 5.1.d / 5.1.e build on a now-empirically-verified foundation.** PRs #49 (FeatureService Redis-entity branch), #50 (InferenceService), and #51 (ShapExplainer) all merged on top of 5.1.b assuming the Redis store works against real Redis. That assumption — previously held only on the strength of fakeredis + docstring claims — is now backed by real-wire evidence.
+6. **Stack left running.** `fraud-redis` is `Up (healthy)` post-run; 5.1.f (FastAPI app) inherits it via the existing dev-stack `make docker-up` flow.
+
+### Test plan
+
+- [x] `docker compose -f docker-compose.dev.yml up -d redis` → `Container fraud-redis Running`
+- [x] `docker exec fraud-redis redis-cli PING` → `PONG`
+- [x] `docker exec fraud-redis redis-cli INFO server` → `redis_version:7.4.9`, `tcp_port:6379`
+- [x] `uv run pytest tests/integration/test_redis_store_integration.py -v --no-cov` → **3 passed in 5.54 s**
+- [x] `uv run pytest tests/unit/test_redis_store.py -v --no-cov` → **63 passed in 6.31 s** (regression-clean)
+- [x] Live wire-format probe: `redis-cli GET` returns canonical JSON
+- [x] Live TYPE probe: `redis-cli TYPE` returns `string`
+- [x] Live TTL probe: 3 different YAML patterns → 3 different live TTLs, all matching to the second
+- [x] `pre-commit run --files <changed report>` → all 12 hooks green
+
+### Out of scope (carrying forward + Sprint 5+)
+
+- A `make redis-up` shortcut — listed in original report's out-of-scope as deliberately deferred. `docker compose ... up -d redis` works fine.
+- CI matrix that runs the integration tests against a CI-side docker-compose — also listed in original out-of-scope; depends on a GitHub-Actions workflow change that's a separate ticket.
+- 5.1.c / 5.1.d / 5.1.e re-verification — those built on 5.1.b but their spec gates were either Docker-independent (5.1.d, 5.1.e is pure-CPU SHAP) or used the `pytest.skip`-if-unreachable pattern correctly (5.1.c). If a similar gap exists for any of them, it would warrant its own audit-and-gap-fill PR.
+- The hash-per-entity (HMGET) refactor — flat-key MGET still fits the budget at current scale; performance evidence above (0.762 ms / 3-key MGET) reinforces the original Decision #1 trade-off.
+- Any source / test / config changes — the implementation already meets the spec verbatim; today's evidence corroborates rather than corrects.
+
+### Refs
+
+- Original 2026-05-09 audit text in `sprints/sprint_5/prompt_5_1_b_report.md` (preserved verbatim above).
+- PR #52 — 0.1.c re-verification, same append-style audit pattern.
+- PR #53 — 0.3.d re-verification, 6-step compose gauntlet.
+- Docker Engine install session that preceded this work (Docker 29.4.3 + Compose v5.1.3 via `get.docker.com` apt repo, systemd-managed).
+- `fraud-redis` runtime: `redis:7.4-alpine`, `redis_version:7.4.9`, `redis_mode:standalone`, port `127.0.0.1:6379`, `--appendonly yes` for persistence.
+- CLAUDE.md §3 (production-API stack), §5.4 (no hardcoded values), §17 (WSL long-running pattern — N/A here; integration suite is 5.54 s, well under the 60 s kill window).
