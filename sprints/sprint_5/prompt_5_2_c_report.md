@@ -250,3 +250,29 @@ Verification passed. Ready for John to commit on `sprint-5/prompt-5-2-c-shadow-c
 ```
 5.2.c: Shadow comparison report — `ShadowComparison` (DataFrame-input; agreement, correlation, per-row cost mirroring Sprint 4.1, in-module bootstrap with deterministic seed); `PromotionVerdict` carries per-criterion pass/fail + reasons (cost>2%, p<0.05, agreement>85%); `scripts/shadow_compare_report.py` Click CLI with --sample mode renders weekly markdown report; 13 unit tests pass in 2.09s; production data join (Postgres + JSONL + parquet labels) stubbed for Sprint 5.x
 ```
+
+---
+
+## Audit and gap-fill — Sprint 5 audit pass (2026-05-10)
+
+**Branch:** `sprint-5/audit-and-gap-fill` (off `main` @ `4ac14bd`, post 5.2.c merge)
+**Status:** No gaps. 5.2.c holds up to spec re-verification verbatim.
+
+### Re-run results
+
+| Gate | Result |
+|---|---|
+| `pytest tests/unit/test_shadow_compare.py --no-cov -q` | **13 passed in 1.91 s** |
+| `uv run python scripts/shadow_compare_report.py --sample` | Exit 0; report written to `reports/shadow_compare_2026-05-10.md` (1869 bytes) |
+| **Sample-mode verdict** (deterministic via fixed seed) | **DO NOT PROMOTE** — `agreement_rate=0.9360 PASS / cost_improvement=-13.62% FAIL / p_value=0.0000 PASS`. Bit-exact match with original 5.2.c output. |
+| Spec surface: `EconomicCosts` (line 146), `PromotionVerdict` (169), `ComparisonReport` (198), `_per_row_costs` (245), `_bootstrap_cost_diff` (284), `ShadowComparison` (357) + `run` (412) + helpers (`_compute_agreement` 501, `_compute_correlation` 506, `_verdict` 524) | All present |
+
+### What was changed
+
+Nothing. Source, tests, and the script all hold up to spec re-verification verbatim. The deterministic seed (42) produces identical bootstrap output across runs — the verdict line in this audit (`0.9360 / -13.62% / 0.0000`) matches the original report's verdict bit-exactly.
+
+### Files touched in this audit pass
+
+| File | Change |
+|---|---|
+| `sprints/sprint_5/prompt_5_2_c_report.md` | append this audit confirmation (no source / test changes) |

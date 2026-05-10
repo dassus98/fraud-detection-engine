@@ -322,3 +322,31 @@ Verification passed. Ready for John to commit on `sprint-5/prompt-5-1-f-fastapi-
 ```
 5.1.f: FastAPI app keystone — /predict + /health + /ready + /metrics; lifespan loads model + degrade-warns Redis/Postgres; per-stage Prometheus histograms + structlog request_id correlation; p95=70.98ms over 100 requests (29% under 100ms budget); + surgical _to_model_dataframe dtype fix in 5.1.c (None→NaN coercion, ~80× speedup vs pd.to_numeric per column)
 ```
+
+---
+
+## Audit and gap-fill — Sprint 5 audit pass (2026-05-10)
+
+**Branch:** `sprint-5/audit-and-gap-fill` (off `main` @ `4ac14bd`, post 5.2.c merge)
+**Status:** No gaps. 5.1.f holds up to spec re-verification verbatim, including the manual curl smoke. The downstream 5.2.b PR added an `AppState.shadow: ShadowService | None` field + a fire-and-forget `state.shadow.score(...)` call in /predict; both are additive and do not regress the 5.1.f contract.
+
+### Re-run results
+
+| Gate | Result |
+|---|---|
+| `docker compose -f docker-compose.dev.yml ps` | All 5 services Up healthy (postgres, redis, mlflow, prometheus, grafana) |
+| `pytest tests/integration/test_api_e2e.py -v --no-cov` | **10 passed** — health + ready + metrics + predict-valid + predict-p95 + missing-fields-422 + invalid-value-422 + degraded-mode + ready-503-when-redis-down + sample-fixture-validates |
+| Spec routes registered | `/health`, `/ready`, `/predict`, `/metrics` (+ `/docs`, `/openapi.json`, `/redoc` from FastAPI defaults) — all 4 spec routes confirmed via `app.routes` introspection |
+| Manual smoke (per spec): `curl -X POST localhost:8000/predict -d @tests/fixtures/sample_txn.json` | Returns valid PredictionResponse: `txn_id=3485113`, `request_id=04ad3283-...`, `score=0.0`, `decision=allow`, top_reasons populated (10 SHAP entries; first is `card1_fraud_v_ewm_lambda_0.05` with -0.937 / decreases_risk) |
+| Manual smoke: `curl /health` | `{"status":"ok","service_name":"fraud-engine-api","version":"0.1.0"}` |
+| Manual smoke: `curl /metrics` | All 4 custom per-stage histograms emitting: `fraud_engine_feature_fetch_seconds_count`, `_inference_seconds_count`, `_shap_seconds_count`, `_predict_total_seconds_count` (all = 1.0 after one /predict call) |
+
+### What was changed
+
+Nothing in 5.1.f's source / tests. The 5.2.b PR (#58) added an additive `AppState.shadow` field + a fire-and-forget `score()` call in /predict (when `Settings.shadow_enabled=True`). Existing 5.1.f tests don't exercise shadow and pass cleanly.
+
+### Files touched in this audit pass
+
+| File | Change |
+|---|---|
+| `sprints/sprint_5/prompt_5_1_f_report.md` | append this audit confirmation (no source / test changes) |

@@ -191,3 +191,39 @@ Verification passed. Ready for John to commit on `sprint-5/prompt-5-1-a-api-sche
 ```
 5.1.a: Pydantic API request/response schemas (TransactionRequest, PredictionResponse, HealthResponse, ReadyResponse)
 ```
+
+---
+
+## Audit and gap-fill — Sprint 5 audit pass (2026-05-10)
+
+**Branch:** `sprint-5/audit-and-gap-fill` (off `main` @ `4ac14bd`, post 5.2.c merge)
+**Status:** No gaps. 5.1.a was already fully spec-compliant; no source / test changes required.
+
+### Spec re-verification — all 7 PASS
+
+| Spec gate | Realised | Status |
+|---|---|---|
+| `TransactionRequest`: every field needed for feature computation + metadata | 18 explicit business-value fields + 5 group-dicts (vesta_v/c/d/m, identity) + `RequestMetadata` sub-model. Mirrors `schemas/raw.py` column groups exactly. | ✅ PASS |
+| `PredictionResponse`: 8 required fields | All present at the documented line numbers — `txn_id` (706), `request_id` (715), `score` (727), `decision` (738), `top_reasons` (749), `latency_ms` (774), `model_version` (787), `degraded_mode` (806) | ✅ PASS |
+| `HealthResponse` | Present at line 826; `status` / `service_name` / `version` fields | ✅ PASS |
+| `ReadyResponse` | Present at line 875; `status` / `checks` / `details` fields + `model_validator` enforcing status↔checks consistency | ✅ PASS |
+| Every field has example value and description for OpenAPI | **43 `Field(...)` calls; 44 `examples=` lines; 44 `description=` lines** — every public field carries both | ✅ PASS |
+| Tests: valid/invalid payloads validate correctly | **59 passed in 3.90 s** (`pytest tests/unit/test_api_schemas.py -v`) | ✅ PASS |
+| `uv run pytest tests/unit/test_api_schemas.py -v` | 59 passed in 3.90 s | ✅ PASS |
+
+### What was checked
+
+1. **Schema surface inventory** via `grep -nE "^class |Field\(" src/fraud_engine/api/schemas.py` — all 4 spec-mandated schemas present at expected line numbers, plus 2 sub-models (`RequestMetadata`, `Reason`) used in their composition.
+2. **PredictionResponse field set** — verbatim grep against the 8 spec-named fields; all 8 found.
+3. **OpenAPI metadata coverage** — counted `Field(...)` calls vs `examples=` and `description=` keyword occurrences. 43 vs 44 vs 44 (the +1 examples/description count above Field calls is from the `_check_group_dict_keys` helper docstring's regex example, not a Field). Every Field has both metadata kwargs.
+4. **Test verification** — ran the spec-named pytest invocation; 59/59 pass.
+
+### What was changed
+
+Nothing. Source, tests, and the original report all hold up to spec re-verification verbatim. This audit appends only this section.
+
+### Files touched in this audit pass
+
+| File | Change |
+|---|---|
+| `sprints/sprint_5/prompt_5_1_a_report.md` | append this audit section (no source / test changes) |

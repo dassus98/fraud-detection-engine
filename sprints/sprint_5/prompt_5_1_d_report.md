@@ -192,3 +192,30 @@ Verification passed. Ready for John to commit on `sprint-5/prompt-5-1-d-inferenc
 ```
 5.1.d: InferenceService (model + calibrator + threshold + atomic mid-session reload)
 ```
+
+---
+
+## Audit and gap-fill — Sprint 5 audit pass (2026-05-10)
+
+**Branch:** `sprint-5/audit-and-gap-fill` (off `main` @ `4ac14bd`, post 5.2.c merge)
+**Status:** No gaps. 5.1.d holds up to spec re-verification verbatim.
+
+### Re-run results
+
+| Gate | Result |
+|---|---|
+| `pytest tests/unit/test_inference.py -v --no-cov` | **33 passed in 7.13 s** |
+| Spec surface: `load()` (line 295), `reload()` (314), `predict()` (326), `set_threshold()` (377) | All present |
+| Spec types: `InferenceResult` (line 150), `_Artefacts` frozen dataclass (133) | All present |
+| Decision threshold from Settings (post-Sprint-4.4: 0.080) | Wired via `Settings.decision_threshold`; verified in TestThreshold tests |
+| Reload mid-session works (atomic GIL-safe single-attribute swap) | TestReload class includes `test_reload_completes` + `test_reload_swaps_artefacts`; concurrent-reload race test discussed in module docstring |
+
+### What was changed
+
+Nothing. Source, tests, and the calibrator/threshold integration all pass spec re-verification verbatim.
+
+### Files touched in this audit pass
+
+| File | Change |
+|---|---|
+| `sprints/sprint_5/prompt_5_1_d_report.md` | append this audit confirmation (no source / test changes) |

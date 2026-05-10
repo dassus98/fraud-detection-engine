@@ -229,3 +229,34 @@ Verification passed. Ready for John to commit on `sprint-5/prompt-5-1-c-feature-
 ```
 5.1.c: FeatureService (Tier-1 inline + Redis entity + Postgres batch + per-source degraded mode)
 ```
+
+---
+
+## Audit and gap-fill — Sprint 5 audit pass (2026-05-10)
+
+**Branch:** `sprint-5/audit-and-gap-fill` (off `main` @ `4ac14bd`, post 5.2.c merge)
+**Status:** No new gaps. The 5.1.f integration work already carried a surgical `_to_model_dataframe` dtype-coercion fix into this module (PR #55: None → NaN coercion via direct `np.float64` row build, ~80× faster than `df.apply(pd.to_numeric)`). Today's audit re-runs the suite to confirm regression-clean.
+
+### Re-run results
+
+| Gate | Result |
+|---|---|
+| `pytest tests/integration/test_feature_service.py -v --no-cov` | **4 passed in 23.79 s** |
+| Spec surface: `connect()` (line 437), `get_features()` (489), `_fetch_entity_features()` (534), `_fetch_batch_features()` (603), `_to_model_dataframe()` (684 — incl. 5.1.f dtype-coercion fix), `health_check()` | All present |
+| `FeatureVector.degraded_mode` field (line 213) | Present |
+| `configs/feature_defaults.yaml` | Present (2.9 KB; population-defaults map intact) |
+| Postgres container | `fraud-postgres` Up 2 hours (healthy) on `127.0.0.1:5432` |
+
+### Known scope acknowledgement (carry-forward, NOT a gap)
+
+The Postgres path is intentionally a `SELECT 1` health probe per the original report's Decision #2 — the real graph-features query (`SELECT pagerank_score, ... FROM feature_batch_graph WHERE entity_id IN (...)`) is deferred to a Sprint 5.x batch loader that designs the schema. The degraded-mode contract is testable today (Postgres up vs down distinguishable), and when 5.x replaces the probe with the real query the failure-mode contract is unchanged. Documented in original Decision #2; reaffirmed.
+
+### What was changed
+
+Nothing. Source, tests, and configs all hold up to spec re-verification verbatim. The 5.1.f `_to_model_dataframe` patch (PR #55) remains the only post-original code change in this module and continues to function correctly.
+
+### Files touched in this audit pass
+
+| File | Change |
+|---|---|
+| `sprints/sprint_5/prompt_5_1_c_report.md` | append this audit confirmation (no source / test changes) |
