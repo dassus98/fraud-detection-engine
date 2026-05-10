@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help install format lint typecheck test test-fast test-integration \
         test-lineage nb-test notebooks data-download data-profile sprint1-baseline \
-        train serve docker-up docker-down docker-ps clean
+        train serve docker-up docker-down docker-ps docker-build warmup-redis clean
 
 # Load .env so API_HOST / API_PORT flow into `make serve`.
 # Uses `-include` so the target doesn't break before `.env` is created.
@@ -70,6 +70,12 @@ docker-down:  ## Stop the dev compose stack.
 
 docker-ps:  ## Show the dev stack's service status (including healthchecks).
 	docker compose -f docker-compose.dev.yml ps
+
+docker-build:  ## Build the production fraud-engine image (Sprint 5.1.g Dockerfile).
+	docker build -t fraud-engine:dev .
+
+warmup-redis:  ## Populate Redis with training-entity feature state (Sprint 5.1.g).
+	uv run python scripts/warmup_redis.py
 
 clean:  ## Remove test / type-check / build caches.
 	rm -rf .pytest_cache .ruff_cache .mypy_cache .pyright htmlcov .coverage coverage.xml build dist *.egg-info

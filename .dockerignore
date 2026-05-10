@@ -1,0 +1,88 @@
+# Build context exclusions for the fraud-detection Dockerfile.
+# Sprint 5 prompt 5.1.g.
+#
+# Goal: shrink build context from ~1.7 GB (full repo with parquets +
+# mlruns + notebook outputs) to <10 MB so `docker build` is fast and
+# reproducible. Anything not listed in the Dockerfile's COPY directives
+# can be excluded here without functional impact; this file is the
+# defence in depth.
+
+# --- VCS + IDE ---
+.git/
+.gitignore
+.gitattributes
+.github/
+.idea/
+.vscode/
+.claude/
+
+# --- Python build / cache artefacts ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.eggs/
+wheels/
+.venv/
+venv/
+env/
+.python-version
+
+# --- Test / lint / type-check caches ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+htmlcov/
+.coverage
+coverage.xml
+.tox/
+.hypothesis/
+.nbmake/
+
+# --- Secrets / local config (must NEVER ship) ---
+.env
+*.env
+!.env.example
+kaggle.json
+.kaggle/
+
+# --- Data / runs / scratch (large + irrelevant) ---
+data/
+logs/
+mlruns/
+reports/
+
+# --- Notebooks (large outputs + not needed by the API) ---
+notebooks/
+*.ipynb_checkpoints/
+
+# --- Sprint reports / docs / tests (not needed in image) ---
+sprints/
+docs/
+tests/
+
+# --- Auxiliary models (Model B/C — Sprint 5.1.f only loads Model A) ---
+models/sprint3/fraudnet/
+models/sprint3/fraudgnn/
+
+# --- Misc ---
+.DS_Store
+*.swp
+*.swo
+*~
+Thumbs.db
+*.log
+*.tmp
+
+# --- Docker / compose (not needed inside the image) ---
+Dockerfile
+.dockerignore
+docker-compose*.yml
+docker-compose*.yaml
+
+# --- Top-level markdown except README (which pyproject references) ---
+*.md
+!README.md
