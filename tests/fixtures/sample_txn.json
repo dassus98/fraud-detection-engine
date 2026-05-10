@@ -1,0 +1,48 @@
+{
+  "TransactionID": 3485113,
+  "TransactionDT": 13046456,
+  "TransactionAmt": 58.95,
+  "ProductCD": "W",
+  "card1": 4141,
+  "card2": 404.0,
+  "card3": 150.0,
+  "card4": "mastercard",
+  "card5": 102.0,
+  "card6": "credit",
+  "addr1": 441.0,
+  "addr2": 87.0,
+  "dist1": null,
+  "dist2": null,
+  "P_emaildomain": "hotmail.com",
+  "R_emaildomain": null,
+  "DeviceType": null,
+  "DeviceInfo": null,
+  "vesta_v": {
+    "V1": null,
+    "V2": null,
+    "V3": null,
+    "V137": 0.0,
+    "V339": null
+  },
+  "vesta_c": {
+    "C1": 1.0,
+    "C2": 1.0,
+    "C13": 3.0,
+    "C14": 1.0
+  },
+  "vesta_d": {
+    "D1": 20.0,
+    "D15": 20.0
+  },
+  "vesta_m": {
+    "M1": null,
+    "M2": null,
+    "M4": null,
+    "M9": null
+  },
+  "identity": {
+    "id_01": null,
+    "id_31": null,
+    "id_38": null
+  }
+}
