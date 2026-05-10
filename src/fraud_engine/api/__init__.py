@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from fraud_engine.api.feature_service import FeatureService, FeatureVector
 from fraud_engine.api.inference import InferenceResult, InferenceService
+from fraud_engine.api.prediction_logger import PredictionLogger
 from fraud_engine.api.redis_store import RedisFeatureStore
 from fraud_engine.api.schemas import (
     Card4Literal,
@@ -59,6 +60,7 @@ __all__ = [
     "HealthStatusLiteral",
     "InferenceResult",
     "InferenceService",
+    "PredictionLogger",
     "PredictionResponse",
     "ProductCodeLiteral",
     "ReadyResponse",
