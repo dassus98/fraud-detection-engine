@@ -6,10 +6,15 @@ Sprint 6.1.a: re-exports the Prometheus metric constants from
 fully-qualified `from fraud_engine.monitoring.prometheus_metrics import …`,
 without forcing a second module import (we re-export references; we don't
 re-import the module).
+
+Sprint 6.1.b: adds `DriftMonitor` + `DriftBaselineBuilder` for offline
+PSI-based drift detection on production features against a training
+baseline.
 """
 
 from __future__ import annotations
 
+from fraud_engine.monitoring.drift import DriftBaselineBuilder, DriftMonitor
 from fraud_engine.monitoring.prometheus_metrics import (
     DECISION_LABELS,
     DEGRADED_MODE_TOTAL,
@@ -49,5 +54,7 @@ __all__ = [
     "SHADOW_EVENT_LABELS",
     "SHADOW_TOTAL",
     "SHAP_SECONDS",
+    "DriftBaselineBuilder",
+    "DriftMonitor",
     "set_shadow_breaker_state",
 ]

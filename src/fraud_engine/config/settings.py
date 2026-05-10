@@ -250,6 +250,51 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- monitoring (Sprint 6.1.b) ---------------------------------
+    psi_alert_threshold: float = Field(
+        default=0.2,
+        ge=0.0,
+        description=(
+            "Population Stability Index threshold above which a "
+            "per-feature drift alert fires. Industry convention: PSI < "
+            "0.10 stable, 0.10-0.25 moderate shift, > 0.25 significant. "
+            "Default 0.20 is slightly conservative — surfaces borderline "
+            "drift before it crosses 'investigate now'. Operator can "
+            "raise to 0.25 if alert volume becomes noisy. Env var: "
+            "PSI_ALERT_THRESHOLD=0.20."
+        ),
+    )
+    psi_bins: int = Field(
+        default=10,
+        ge=2,
+        description=(
+            "Number of equal-frequency quantile bins used by "
+            "DriftBaselineBuilder. 10 is the industry standard — 5 too "
+            "coarse to catch tail drift, 20+ noisy on small recent "
+            "windows. Drives the size of the persisted baseline parquet "
+            "(n_kept_features × n_bins rows)."
+        ),
+    )
+    drift_baseline_path: Path = Field(
+        default=_PROJECT_ROOT / "data" / "baselines" / "distributions.parquet",
+        description=(
+            "Long-format parquet with per-feature quantile edges + "
+            "baseline percentages (one row per (feature, bin)). "
+            "Generated once via scripts/build_drift_baseline.py from "
+            "the training-data slice. Loaded by DriftMonitor at "
+            "construction. Gitignored under data/."
+        ),
+    )
+    drift_alert_log_dir: Path = Field(
+        default=_PROJECT_ROOT / "logs" / "drift",
+        description=(
+            "Root for per-run drift-alert JSONL files: each "
+            "DriftMonitor.check_and_alert run writes to "
+            "{drift_alert_log_dir}/{run_id}/drift_alerts.jsonl. "
+            "Mirrors logs/lineage/{run_id}/ convention. Gitignored."
+        ),
+    )
+
     # --- temporal split (Sprint 1 onwards) --------------------------
     # IEEE-CIS does not ship a calendar-anchored TransactionDT — Kaggle
     # publishes seconds since an anonymised reference. 2017-12-01 UTC
@@ -321,7 +366,9 @@ class Settings(BaseSettings):
             )
         return value
 
-    @field_validator("data_dir", "models_dir", "logs_dir")
+    @field_validator(
+        "data_dir", "models_dir", "logs_dir", "drift_baseline_path", "drift_alert_log_dir"
+    )
     @classmethod
     def _resolve_relative_to_project_root(cls, value: Path) -> Path:
         """Resolve relative path overrides against the project root, not CWD.
