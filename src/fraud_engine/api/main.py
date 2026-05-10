@@ -174,6 +174,7 @@ from fraud_engine.api.schemas import (
     Reason,
     TransactionRequest,
 )
+from fraud_engine.api.shadow import ShadowService
 from fraud_engine.api.shap_explainer import ShapExplainer
 from fraud_engine.config.settings import Settings, get_settings
 from fraud_engine.utils.logging import (
@@ -260,6 +261,10 @@ class AppState:
             at startup).
         explainer: Loaded ShapExplainer (TreeExplainer + reason_codes
             YAML).
+        shadow: Loaded ShadowService when `Settings.shadow_enabled` is
+            True AND the FraudNet artefacts loaded successfully.
+            None when shadow is disabled OR the load failed (the
+            lifespan degrade-warns rather than crashing).
         settings: The active Settings — either the production singleton
             or the test factory's override.
     """
@@ -267,6 +272,7 @@ class AppState:
     inference: InferenceService
     feature_service: FeatureService
     explainer: ShapExplainer
+    shadow: ShadowService | None
     settings: Settings
 
 
@@ -392,14 +398,44 @@ def _make_lifespan(
                 detail=str(exc),
             )
 
+        # Step 4: optional shadow service (Sprint 5.2.b). Loaded only
+        # when Settings.shadow_enabled is True. Degrade-warns on load
+        # failure (mirrors the Redis/Postgres degrade-warn pattern from
+        # Decision 2 above): a missing FraudNet artefact at deploy
+        # time logs a WARNING but does NOT crash the API — Model A
+        # predictions still serve. Set None when disabled or load
+        # fails; the /predict route checks for None and skips the
+        # shadow call.
+        shadow_service: ShadowService | None = None
+        if settings.shadow_enabled:
+            shadow_service = ShadowService(settings=settings)
+            try:
+                shadow_service.load()
+                _logger.info(
+                    "lifespan.shadow_loaded",
+                    shadow_model_version=shadow_service.model_version,
+                )
+            except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
+                _logger.warning(
+                    "lifespan.shadow_load_failed",
+                    error_type=type(exc).__name__,
+                    detail=str(exc),
+                )
+                shadow_service = None
+
         app.state.app_state = AppState(
             inference=inference,
             feature_service=feature_service,
             explainer=explainer,
+            shadow=shadow_service,
             settings=settings,
         )
 
-        _logger.info("lifespan.ready", model_version=inference.model_version)
+        _logger.info(
+            "lifespan.ready",
+            model_version=inference.model_version,
+            shadow_loaded=shadow_service is not None,
+        )
         try:
             yield
         finally:
@@ -425,6 +461,19 @@ def _make_lifespan(
                     error_type=type(exc).__name__,
                     detail=str(exc),
                 )
+            if shadow_service is not None:
+                # Drain pending shadow tasks (with the service's
+                # internal _DRAIN_TIMEOUT_S timeout). Best-effort —
+                # any task still running after the timeout is cancelled.
+                try:
+                    await shadow_service.disconnect()
+                except Exception as exc:  # noqa: BLE001 — defensive on shutdown
+                    _logger.warning(
+                        "lifespan.shutdown_disconnect_error",
+                        component="shadow_service",
+                        error_type=type(exc).__name__,
+                        detail=str(exc),
+                    )
 
     return _lifespan
 
@@ -690,6 +739,22 @@ def _register_routes(app: FastAPI) -> None:
         # request path; defensive UUID4 only for the (impossible) case
         # where middleware skipped binding.
         rid_str = get_request_id() or uuid4().hex
+
+        # Stage 4 (Sprint 5.2.b): fire-and-forget shadow scoring when
+        # enabled. Does NOT await — schedules an `asyncio.create_task`
+        # internally and returns in <1 ms (per 5.2.a-style fire-and-forget
+        # baseline). The shadow result lands in structlog as
+        # `shadow.scored` with the request_id correlation tag; it never
+        # affects the served response. Safe to call when shadow is None
+        # (skips silently) or the breaker is open (logs an info skip).
+        if state.shadow is not None:
+            state.shadow.score(
+                feature_vector.df,
+                request_id=rid_str,
+                champion_score=inf.probability,
+                champion_decision=inf.decision,
+            )
+
         return PredictionResponse(
             txn_id=req.TransactionID,
             request_id=UUID(rid_str),
