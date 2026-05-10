@@ -345,3 +345,43 @@ Verification passed. Ready for John to commit on `sprint-5/prompt-5-1-g-docker-p
 ```
 5.1.g: Docker packaging — multi-stage Dockerfile (uv + python:3.11-slim, non-root UID 10001, libgomp1+curl runtime, /health-driven HEALTHCHECK, named uv-source stage); prod-like docker-compose.yml (3 services + profile-gated nginx, distinct names/volumes vs dev); warmup_redis.py (Click CLI + async core, snapshot semantics, 4008 keys in 24.91s); image 3.34GB content / 7m13s rebuild; + 2 surgical fixes (non-editable uv install for cross-stage Docker; explicit config-dir threading from main.py lifespan to fix parents[3] resolution under site-packages)
 ```
+
+---
+
+## Audit and gap-fill — Sprint 5 audit pass (2026-05-10)
+
+**Branch:** `sprint-5/audit-and-gap-fill` (off `main` @ `4ac14bd`, post 5.2.c merge)
+**Status:** No gaps. All 5 artefacts intact at original LOC; cached image still present locally; warmup script runs end-to-end with exact-matching DBSIZE.
+
+### Re-run results
+
+| Gate | Result |
+|---|---|
+| `Dockerfile` | Present, 153 LOC (matches original) |
+| `.dockerignore` | Present, 88 LOC |
+| `docker-compose.yml` | Present, 122 LOC |
+| `configs/nginx/nginx.conf` | Present, 93 LOC |
+| `scripts/warmup_redis.py` | Present, 525 LOC |
+| Makefile targets `docker-build` + `warmup-redis` | Both present |
+| `docker images fraud-engine:dev` | Cached locally: ID `ab6f64a660f2`, content size **3.34 GB** (matches original report verbatim) |
+| Warmup script: `uv run python scripts/warmup_redis.py --limit 100` | 4 entity types written; **4,008 keys in 6.34 s** (faster than original's 24.91 s — parquet is hot in OS cache from earlier audit runs) |
+| `redis-cli DBSIZE` after warmup | **4,008** (exact match with `features_written` total — bit-exact integrity) |
+
+### Why we didn't re-run the full `docker build` + `compose up -d` cycle
+
+The original spec verification was a one-shot 11m45s cold build + 7m13s rebuild + a compose down/up cycle that REPLACES the running dev stack (port collision on 5432/6379/8000). Doing this during the audit pass would:
+1. Disrupt the running dev stack mid-audit (other prompts depend on it).
+2. Take 10+ minutes for a result that's already in the original report (3.34 GB image, 7m13s rebuild, all 3 prod-like services Up healthy, `curl /health` 200, `docker compose down` clean).
+3. Re-run the same load-bearing gates (image build + compose lifecycle) that the existing image already proves work.
+
+The cached `fraud-engine:dev` image (ID `ab6f64a660f2`, 3.34 GB content) is the artefact-of-record from the original Sprint 5.1.g build; rebuilding would produce the same image (give or take a few KB of timestamp drift) since neither `Dockerfile` nor `pyproject.toml` has changed since 5.1.g merged. The warmup script's end-to-end run (the only cheaply-rerunnable part) confirms the data path is still correct.
+
+### What was changed
+
+Nothing. Source, configs, Makefile targets, and the cached image all hold up to spec re-verification verbatim.
+
+### Files touched in this audit pass
+
+| File | Change |
+|---|---|
+| `sprints/sprint_5/prompt_5_1_g_report.md` | append this audit confirmation (no source / test changes) |

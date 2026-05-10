@@ -222,3 +222,29 @@ Verification passed. Ready for John to commit on `sprint-5/prompt-5-2-a-predicti
 ```
 5.2.a: PredictionLogger (async fire-and-forget Postgres audit log) — `scripts/create_predictions_table.sql` (11 cols + 5 indexes + CHECK constraints, idempotent DDL); `PredictionLogger` class with `asyncio.create_task` write path that never blocks (236 µs / call vs ~3 ms sync, 12.7× speedup); 6/6 integration tests pass in 4.69 s incl. schema-match round-trip, JSONB top_reasons fidelity, 50-concurrent-writes-don't-block (verbatim 11.80 ms), Postgres-down graceful drop, log-before-connect graceful drop, async-context-manager lifecycle
 ```
+
+---
+
+## Audit and gap-fill — Sprint 5 audit pass (2026-05-10)
+
+**Branch:** `sprint-5/audit-and-gap-fill` (off `main` @ `4ac14bd`, post 5.2.c merge)
+**Status:** No gaps. 5.2.a holds up to spec re-verification verbatim.
+
+### Re-run results
+
+| Gate | Result |
+|---|---|
+| `pytest tests/integration/test_prediction_logger.py -v --no-cov` | **6 passed** (schema round-trip, JSONB top_reasons fidelity, concurrent-writes, Postgres-down graceful drop, log-before-connect graceful drop, async-context-manager lifecycle) |
+| **Concurrent-writes "never blocks" gate** | **267.4 µs/call** (50 calls in 13.37 ms) — within noise of original 236 µs/call; ~11× faster than synchronous baseline |
+| Spec surface: `PredictionLogger` class (line 161), `connect` (225), `disconnect` (244), `log` (289), `_write_one` (329), `asyncpg.create_pool` (237) | All present |
+| `scripts/create_predictions_table.sql` schema columns | All 11 mirrored fields present: `id`, `created_at`, `request_id`, `txn_id`, `client_id`, `score`, `decision`, `top_reasons`, `latency_ms`, `model_version`, `degraded_mode` + CHECK constraints + idempotent CREATEs |
+
+### What was changed
+
+Nothing. Source, tests, and the SQL schema all hold up to spec re-verification verbatim.
+
+### Files touched in this audit pass
+
+| File | Change |
+|---|---|
+| `sprints/sprint_5/prompt_5_2_a_report.md` | append this audit confirmation (no source / test changes) |

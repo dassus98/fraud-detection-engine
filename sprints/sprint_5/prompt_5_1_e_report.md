@@ -198,3 +198,30 @@ Verification passed. Ready for John to commit on `sprint-5/prompt-5-1-e-shap-exp
 ```
 5.1.e: ShapExplainer (TreeExplainer + reason_codes.yaml + sum-check invariant)
 ```
+
+---
+
+## Audit and gap-fill — Sprint 5 audit pass (2026-05-10)
+
+**Branch:** `sprint-5/audit-and-gap-fill` (off `main` @ `4ac14bd`, post 5.2.c merge)
+**Status:** No gaps. 5.1.e holds up to spec re-verification verbatim.
+
+### Re-run results
+
+| Gate | Result |
+|---|---|
+| `pytest tests/unit/test_shap_explainer.py -v --no-cov` | **32 passed in 3.73 s** |
+| Spec surface: `Contribution` NamedTuple (line 148), `ShapExplainer` class (306), `top_k_contributions()` (376), `map_to_reasons()` (430), `reload()` (460), `expected_value` / `feature_names` / `reason_codes` properties (490+) | All present |
+| `configs/reason_codes.yaml` — 20-30 entries per spec | **24 entries** (within range) |
+| SHAP sum-check invariant test (`expected_value + sum(shap[0]) ≈ booster.predict(X, raw_score=True)[0]`) | `test_zeros_input_sum_check` + `test_random_input_sum_check` (lines 328 / 352) — both pass |
+| Reason mapping returns clean strings | Tested via `TestMapToReasons` test class |
+
+### What was changed
+
+Nothing. Source, tests, and the reason-codes YAML all hold up to spec re-verification verbatim.
+
+### Files touched in this audit pass
+
+| File | Change |
+|---|---|
+| `sprints/sprint_5/prompt_5_1_e_report.md` | append this audit confirmation (no source / test changes) |

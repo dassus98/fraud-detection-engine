@@ -273,3 +273,31 @@ Verification passed. Ready for John to commit on `sprint-5/prompt-5-2-b-shadow-m
 ```
 5.2.b: Shadow Mode + CircuitBreaker — generic 3-state breaker (closed/open/half_open with exponential backoff, threadsafe via threading.Lock); ShadowService loads FraudNet challenger + fire-and-forget score() via asyncio.create_task + asyncio.to_thread (never blocks); wired via Settings.shadow_enabled + lifespan (degrade-warn) + /predict route; shadow failure adds only +11.4 ms p95 (81.4 ms vs baseline 73.0 ms; under 100 ms budget); 13 unit tests for breaker state machine + 4 integration tests for end-to-end wiring
 ```
+
+---
+
+## Audit and gap-fill — Sprint 5 audit pass (2026-05-10)
+
+**Branch:** `sprint-5/audit-and-gap-fill` (off `main` @ `4ac14bd`, post 5.2.c merge)
+**Status:** No gaps. 5.2.b holds up to spec re-verification verbatim.
+
+### Re-run results
+
+| Gate | Result |
+|---|---|
+| `pytest tests/integration/test_shadow.py -v --no-cov` | **4 passed** (shadow_disabled / shadow_enabled / shadow_failure_doesnt_block_main_latency / circuit_breaker_trips_after_n_failures) |
+| `pytest tests/unit/test_circuit_breaker.py -v --no-cov` | **13 passed in 3.67 s** (every state transition + 10-thread concurrent stress + invalid-args bonus) |
+| **Shadow failure latency gate** | **p95=93.20 ms** under sustained synthetic failures (within noise of original 81.4 ms; both under the 100 ms budget) |
+| Spec surface: `CircuitBreaker` class (line 154 in circuit_breaker.py) + `can_proceed` (265) + `record_success` (294) + `record_failure` (312) | All present |
+| Spec surface: `ShadowService` class (line 213 in shadow.py) + `score` (349) using `asyncio.create_task` (394) + `asyncio.to_thread` for predict_proba (429) | All present |
+| Env wiring: `Settings.shadow_enabled` Field (settings.py:228) + `SHADOW_ENABLED=false` doc (`.env.example:57`) + lifespan load (main.py:410) + /predict score-call gated on `state.shadow is not None` (main.py:750) | All present |
+
+### What was changed
+
+Nothing. Source, tests, and env wiring all hold up to spec re-verification verbatim.
+
+### Files touched in this audit pass
+
+| File | Change |
+|---|---|
+| `sprints/sprint_5/prompt_5_2_b_report.md` | append this audit confirmation (no source / test changes) |

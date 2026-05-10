@@ -328,3 +328,30 @@ Three claims in the original docstring + Decision #1/#2/#4 had never been round-
 - Docker Engine install session that preceded this work (Docker 29.4.3 + Compose v5.1.3 via `get.docker.com` apt repo, systemd-managed).
 - `fraud-redis` runtime: `redis:7.4-alpine`, `redis_version:7.4.9`, `redis_mode:standalone`, port `127.0.0.1:6379`, `--appendonly yes` for persistence.
 - CLAUDE.md §3 (production-API stack), §5.4 (no hardcoded values), §17 (WSL long-running pattern — N/A here; integration suite is 5.54 s, well under the 60 s kill window).
+
+---
+
+## Audit and gap-fill — Sprint 5 audit pass (2026-05-10)
+
+**Branch:** `sprint-5/audit-and-gap-fill` (off `main` @ `4ac14bd`, post 5.2.c merge)
+**Status:** No gaps. The 2026-05-09 audit + the PR #54 re-verification together cover every spec gate end-to-end. Re-running today confirms regression-clean.
+
+### Re-run results
+
+| Gate | Result |
+|---|---|
+| `docker compose -f docker-compose.dev.yml ps redis` | `fraud-redis` Up 2 hours (healthy), `127.0.0.1:6379` |
+| `pytest tests/unit/test_redis_store.py -v --no-cov` | **63 passed in 6.30 s** (fakeredis) |
+| `pytest tests/integration/test_redis_store_integration.py -v --no-cov` | **3 passed in 7.37 s** (real Redis 7.4.9) |
+| Spec surface: ConnectionPool / get_multi / write_entity_features / make_key / ttl_for | All present at lines 120, 366, 404, 467 (write), 437 (get_multi); confirmed via grep |
+| `configs/redis_feature_store.yaml` | Present (3.8 KB; load-bearing TTL pattern map intact) |
+
+### What was changed
+
+Nothing. Source, tests, integration tests, and YAML all hold up. PR #54 already closed the only deferred gate (live `up -d redis` + 3 integration tests SKIPPED → PASSED).
+
+### Files touched in this audit pass
+
+| File | Change |
+|---|---|
+| `sprints/sprint_5/prompt_5_1_b_report.md` | append this audit confirmation (no source / test changes) |
