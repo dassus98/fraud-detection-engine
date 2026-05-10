@@ -1,0 +1,122 @@
+# Production-like stack for the fraud-detection engine.
+#
+# Sprint 5 prompt 5.1.g. Boots the data plane (Postgres + Redis) plus
+# the Sprint 5.1.f FastAPI image built by the sibling Dockerfile.
+# An optional nginx reverse proxy is profile-gated:
+#
+#   docker compose up -d                  # 3 services: postgres, redis, fraud-api
+#   docker compose --profile proxy up -d  # 4 services: + nginx on :80
+#
+# This file is INDEPENDENT of `docker-compose.dev.yml` (which carries
+# observability — MLflow, Prometheus, Grafana). The two stacks both
+# bind to ports 5432 / 6379 (and the prod-like adds 8000) — only one
+# can run at a time. Stop the dev stack first via `make docker-down`
+# before bringing this one up.
+#
+# Volumes use a `prod_` prefix so the prod-like stack's data lives
+# separately from the dev stack's data — switching between stacks
+# preserves both states.
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    container_name: fraud-prod-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fraud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fraud}
+      POSTGRES_DB: ${POSTGRES_DB:-fraud}
+    volumes:
+      - prod_postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U ${POSTGRES_USER:-fraud} -d ${POSTGRES_DB:-fraud}"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: fraud-prod-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - prod_redis_data:/data
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  fraud-api:
+    # Builds from the sibling Dockerfile. `pull_policy: never` (compose
+    # 2.22+) would pin to a locally-built tag; we omit it so a CI-side
+    # `docker build && docker compose pull` works the same as a local
+    # `docker compose up --build`.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fraud-engine:dev
+    container_name: fraud-api
+    # Override the Settings defaults with compose service DNS so the
+    # container reaches Postgres + Redis via the compose network rather
+    # than the host loopback (which is unreachable from inside the
+    # container without `host-gateway` indirection).
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: ${API_PORT:-8000}
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_URL: postgresql://${POSTGRES_USER:-fraud}:${POSTGRES_PASSWORD:-fraud}@postgres:5432/${POSTGRES_DB:-fraud}
+      # The Sprint 5.1.f primitives (RedisFeatureStore, FeatureService,
+      # ShapExplainer) resolve config-file paths from `parents[3]` of
+      # the module — which works in dev but breaks under the
+      # site-packages install path inside this container. Setting
+      # FRAUD_ENGINE_CONFIG_DIR explicitly tells main.py's lifespan
+      # where the YAMLs live (Dockerfile copies them to /app/configs/).
+      FRAUD_ENGINE_CONFIG_DIR: /app/configs
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DECISION_THRESHOLD: ${DECISION_THRESHOLD:-0.080000}
+      FRAUD_COST_USD: ${FRAUD_COST_USD:-450}
+      FP_COST_USD: ${FP_COST_USD:-35}
+      TP_COST_USD: ${TP_COST_USD:-5}
+      TRANSACTION_DT_ANCHOR_ISO: ${TRANSACTION_DT_ANCHOR_ISO:-2017-12-01T00:00:00+00:00}
+      TRAIN_END_DT: ${TRAIN_END_DT:-10454400}
+      VAL_END_DT: ${VAL_END_DT:-13046400}
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Inherits the Dockerfile HEALTHCHECK directive automatically (no
+    # override needed). `restart: unless-stopped` recovers from a
+    # transient lifespan crash without manual intervention but respects
+    # an explicit `docker compose stop`.
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: fraud-prod-nginx
+    profiles: ["proxy"]
+    volumes:
+      - ./configs/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      # Profile-gated; binds 80 only when `--profile proxy` is on.
+      - "127.0.0.1:${NGINX_PORT:-80}:80"
+    depends_on:
+      fraud-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  prod_postgres_data:
+  prod_redis_data:

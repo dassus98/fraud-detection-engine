@@ -149,10 +149,12 @@ Cross-references:
 from __future__ import annotations
 
 import dataclasses
+import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from importlib.metadata import version as _pkg_version
+from pathlib import Path
 from typing import Final
 from uuid import UUID, uuid4
 
@@ -297,12 +299,28 @@ def _make_lifespan(
         """Start: load model artefacts (fail-fast); connect dependencies (degrade-warn)."""
         settings = settings_override if settings_override is not None else get_settings()
 
+        # Resolve the configs directory once. The default `parents[3]`
+        # path-discovery in the per-module `_resolve_config_path`
+        # helpers (redis_store / feature_service / shap_explainer) works
+        # in dev (where the module lives at `<repo>/src/fraud_engine/api/`
+        # — parents[3] gives `<repo>/`) but breaks in installed-package
+        # contexts like Docker (where the module lives at
+        # `/opt/venv/lib/python3.11/site-packages/fraud_engine/api/` —
+        # parents[3] gives `/opt/venv/lib/python3.11/`, which has no
+        # configs/). The Dockerfile sets WORKDIR=/app and COPY's
+        # configs/ to /app/configs/. The cwd-relative `Path("configs")`
+        # resolves correctly in both contexts: dev (run from repo root)
+        # and container (cwd=/app). The FRAUD_ENGINE_CONFIG_DIR env var
+        # lets an operator override for unusual layouts.
+        config_dir_str = os.environ.get("FRAUD_ENGINE_CONFIG_DIR")
+        config_dir = Path(config_dir_str) if config_dir_str else Path.cwd() / "configs"
         _logger.info(
             "lifespan.startup",
             redis_url=settings.redis_url,
             # Postgres URL contains the password; log only the host:port for safety.
             postgres_host=_postgres_host(settings.postgres_url),
             decision_threshold=settings.decision_threshold,
+            config_dir=str(config_dir),
         )
 
         # Step 1: model artefacts. Fail-fast — a missing joblib is a
@@ -313,8 +331,10 @@ def _make_lifespan(
         # Step 2: ShapExplainer. Loads its own copy of the LightGBM
         # model (~50 ms duplicate joblib read; acceptable one-time
         # startup cost vs reaching into InferenceService's private
-        # `_artefacts` field).
-        explainer = ShapExplainer()
+        # `_artefacts` field). Pass the explicit reason_codes path so
+        # the resolver doesn't fall back to parents[3] (which breaks
+        # under site-packages install — see config_dir comment above).
+        explainer = ShapExplainer(reason_codes_path=config_dir / "reason_codes.yaml")
 
         # Step 3: feature_service. Lifespan tolerates Redis/Postgres
         # unreachable at startup — logs a WARNING and proceeds. The
@@ -327,11 +347,15 @@ def _make_lifespan(
         # Without this, FeatureService(redis_store=None) would call
         # `RedisFeatureStore()` which reads from `get_settings()` — the
         # production singleton, not our override.
-        redis_store = RedisFeatureStore(redis_url=settings.redis_url)
+        redis_store = RedisFeatureStore(
+            redis_url=settings.redis_url,
+            ttl_config_path=config_dir / "redis_feature_store.yaml",
+        )
         feature_service = FeatureService(
             redis_store=redis_store,
             postgres_url=settings.postgres_url,
             settings=settings,
+            defaults_config_path=config_dir / "feature_defaults.yaml",
         )
         # The store hasn't been connected yet (we own it; FeatureService
         # only auto-connects when it owns the store). Connect both here
