@@ -304,3 +304,108 @@ From the 0.3.d spec:
 ---
 
 Verification passed (static; live bring-up deferred per memory note). Ready for John to commit. No git action from me.
+
+---
+
+## Re-verification — sprint-5-era (2026-05-09)
+
+Re-run on branch `sprint-0/prompt-0-3-d-dev-stack-reverification` (off `main` at `e1df770`, post-0.1.c-re-verify merge). Goal: close the original report's two explicitly-deferred acceptance items (`docker compose up -d verified live` and `docker compose down verified live`) and run the full 6-step spec gauntlet now that Docker Engine 29.4.3 is installed in WSL Ubuntu.
+
+### Re-run inputs
+
+- **Docker Engine:** `29.4.3` (build `055a478`), systemd-managed (auto-starts on WSL boot).
+- **Docker Compose plugin:** `v5.1.3`.
+- **Compose file:** `docker-compose.dev.yml` unchanged from the 2026-04-23 audit (117 LOC; sha256 unchanged).
+- **Skeleton configs:** `configs/prometheus/prometheus.yml` + `configs/grafana/datasources.yml` unchanged from the 2026-04-23 audit.
+
+### Spec-bullet compliance — re-confirm
+
+| Spec requirement | Status | Evidence |
+|---|---|---|
+| Every service has a healthcheck | ✅ PASS | Postgres `pg_isready` / Redis `redis-cli ping` / MLflow Python urllib / Prometheus `/-/ready` / Grafana `/api/health`. All five reach `Up (healthy)` within ~50 s. |
+| Every service has a named volume | ✅ PASS | `docker compose config` enumerates `postgres_data`, `redis_data`, `mlflow_data`, `prometheus_data`, `grafana_data` with `name: fraud-detection-engine_<vol>`. |
+| All ports bind to `127.0.0.1` | ✅ PASS | `docker compose ps` shows `127.0.0.1:5432->5432/tcp`, `:6379`, `:5000`, `:9090`, `:3000`. No `0.0.0.0` bindings. |
+| Environment-variable driven | ✅ PASS | `${POSTGRES_USER:-fraud}`, `${MLFLOW_PORT:-5000}`, etc. throughout. `.env` overrides verified against `.env.example` defaults. |
+| No secrets in the compose file | ✅ PASS | Only `${VAR:-dev-default}` patterns; no plaintext `password:` literal. The `fraud`/`admin` defaults match `.env.example` and are dev-only. |
+
+### Spec verification — 6-step gauntlet
+
+```text
+$ docker compose -f docker-compose.dev.yml config
+                                       # exit 0
+                                       # full resolved YAML rendered (740-ish lines)
+                                       # 5 services, 5 volumes, env-substitution applied
+                                       # all `host_ip: 127.0.0.1` confirmed in output
+
+$ docker compose -f docker-compose.dev.yml down
+ Container fraud-grafana    Removed
+ Container fraud-redis      Removed
+ Container fraud-prometheus Removed
+ Container fraud-mlflow     Removed
+ Container fraud-postgres   Removed
+ Network fraud-detection-engine_default Removed
+                                       # named volumes preserved (postgres_data etc. survive)
+
+$ docker compose -f docker-compose.dev.yml up -d
+ Container fraud-postgres   Started
+ Container fraud-redis      Started
+ Container fraud-mlflow     Started
+ Container fraud-prometheus Started → Healthy
+ Container fraud-grafana    Started
+                                       # cached images; ~5 s up + ~50 s healthcheck stabilisation
+
+$ sleep 30 && docker compose -f docker-compose.dev.yml ps
+NAME               IMAGE                           STATUS                    PORTS
+fraud-grafana      grafana/grafana:11.4.0          Up 37 seconds (healthy)   127.0.0.1:3000->3000/tcp
+fraud-mlflow       ghcr.io/mlflow/mlflow:v3.11.1   Up 48 seconds (healthy)   127.0.0.1:5000->5000/tcp
+fraud-postgres     postgres:16.4-alpine            Up 48 seconds (healthy)   127.0.0.1:5432->5432/tcp
+fraud-prometheus   prom/prometheus:v3.1.0          Up 48 seconds (healthy)   127.0.0.1:9090->9090/tcp
+fraud-redis        redis:7.4-alpine                Up 48 seconds (healthy)   127.0.0.1:6379->6379/tcp
+
+$ curl -s localhost:5000 | head -5
+<!doctype html><html lang="en"><head><meta charset="utf-8"/>...<title>MLflow</title>...
+                                       # MLflow UI returns valid HTML; ✅ HTTP 200 served
+
+$ docker exec $(docker compose -f docker-compose.dev.yml ps -q redis) redis-cli PING
+PONG
+                                       # ✅ Redis responding via container exec
+
+$ docker compose -f docker-compose.dev.yml down
+ Container fraud-grafana    Removed
+ Container fraud-redis      Removed
+ Container fraud-prometheus Removed
+ Container fraud-mlflow     Removed
+ Container fraud-postgres   Removed
+ Network fraud-detection-engine_default Removed
+                                       # clean shutdown; volumes persist
+```
+
+After the spec's 6 steps, the stack was brought back up (`docker compose up -d`) so Sprint 5.1.f's FastAPI work inherits a running dev stack on `make docker-ps`.
+
+### Acceptance checklist (re-verification)
+
+- [x] Spec-bullet 1: every service has a healthcheck (verified; all 5 reach `(healthy)`).
+- [x] Spec-bullet 2: every service has a named volume (verified via `docker compose config`).
+- [x] Spec-bullet 3: all ports bind to `127.0.0.1` (verified via `docker compose ps` PORTS column).
+- [x] Spec-bullet 4: environment-variable driven (verified via `${VAR:-default}` substitution in `docker compose config` output).
+- [x] Spec-bullet 5: no secrets in the compose file (verified by `grep -E '(password|secret).*:' docker-compose.dev.yml` returns only `${VAR:-default}` references).
+- [x] **NEW:** `docker compose config` exits 0 (validates schema + env substitution).
+- [x] **NEW:** `docker compose up -d` brings up all 5 services.
+- [x] **NEW:** `docker compose ps` shows 5/5 `Up (healthy)`.
+- [x] **NEW:** `curl -s localhost:5000 | head -5` returns MLflow HTML (HTTP 200).
+- [x] **NEW:** `docker exec $(... ps -q redis) redis-cli PING` returns `PONG`.
+- [x] **NEW:** `docker compose down` cleanly stops all 5 services + removes the network (named volumes survive — only `down -v` would wipe them).
+- [x] Pre-commit hooks (proactive run on the touched report file) pass.
+- [x] No git commands beyond the §2.1 carve-out.
+
+### Out of scope (carrying forward from original audit + Sprint 5+)
+
+- Sprint 5 FastAPI `/metrics` endpoint that the `fraud-api` Prometheus scrape job points at — Sprint 5.x.
+- Sprint 6 Grafana dashboards (`configs/grafana/dashboards.yml` + JSON dashboards) — Sprint 6.
+- Prometheus alerting rules (`rule_files:` + `alertmanagers:`) — Sprint 6.
+- Postgres schema bootstrapping (offline feature store tables) — Sprint 5.x batch loader.
+- TLS / auth hardening — Sprint 6 (compose stack is loopback-only by design until then).
+
+### Conclusion
+
+**Prompt 0.3.d is now fully verified.** The two acceptance items deferred at the original audit (`docker compose up -d verified live` and `docker compose down verified live`) are now ✅ — both execute cleanly against the unchanged compose file. All 5 services reach healthy on first try; MLflow + Redis respond to direct probes; the spec's 6-step gauntlet passes end-to-end without any compose-file edits. Sprint 5.1.f inherits a fully-functional, healthchecked dev stack.
