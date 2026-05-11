@@ -217,6 +217,23 @@ SHADOW_TOTAL: Final[Counter] = Counter(
     ["event"],
 )
 
+# Sprint 6.1.d retrofit — surface offline drift + shadow-disagreement
+# signals on the Prometheus scrape so alert rules can fire on them
+# without a log-scraper sidecar.  Both unlabelled (1 series each) —
+# per-feature breakdown stays in the JSONL stream (high-cardinality risk
+# if labelled by feature_name across 743 features).
+DRIFT_ALERTS_TOTAL: Final[Counter] = Counter(
+    "fraud_engine_drift_alerts_total",
+    "Cumulative drift alerts written by DriftMonitor.check_and_alert. "
+    "One increment per JSONL line written to "
+    "logs/drift/{run_id}/drift_alerts.jsonl.",
+)
+SHADOW_DISAGREEMENT_TOTAL: Final[Counter] = Counter(
+    "fraud_engine_shadow_disagreement_total",
+    "Cumulative shadow-vs-champion decision disagreements. "
+    "One increment per `shadow.scored` event with agree_decision=False.",
+)
+
 
 # ---------------------------------------------------------------------
 # Gauges — instantaneous state.
@@ -308,6 +325,7 @@ __all__ = [
     "DEGRADED_MODE_TOTAL",
     "DEPENDENCY_LABELS",
     "DEPENDENCY_UP",
+    "DRIFT_ALERTS_TOTAL",
     "FEATURE_FETCH_SECONDS",
     "INFERENCE_SECONDS",
     "LATENCY_BUCKETS",
@@ -318,6 +336,7 @@ __all__ = [
     "SCORE_BUCKETS",
     "SHADOW_BREAKER_STATE",
     "SHADOW_BREAKER_STATE_LABELS",
+    "SHADOW_DISAGREEMENT_TOTAL",
     "SHADOW_EVENT_LABELS",
     "SHADOW_TOTAL",
     "SHAP_SECONDS",

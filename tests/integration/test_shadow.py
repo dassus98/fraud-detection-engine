@@ -396,3 +396,104 @@ async def _drain_pending_shadow_tasks_fixture(
     """Empty fixture placeholder kept for symmetry with the other test
     files; per-test cleanup happens inline via `asyncio.gather`."""
     yield
+
+
+# ---------------------------------------------------------------------
+# Sprint 6.1.d retrofit — Prometheus disagreement Counter behaviour.
+#
+# `fraud_engine_shadow_disagreement_total` feeds the `ShadowDisagreement`
+# Prometheus alert rule (Sprint 6.1.d).  These two tests assert the
+# Counter's contract: increments on every shadow-vs-champion decision
+# disagreement, stays put on agreement.  Uses the **delta pattern** so
+# tests are order-independent against the global REGISTRY singleton.
+# ---------------------------------------------------------------------
+
+
+def _disagreement_counter_value() -> float:
+    """Read the current absolute value of fraud_engine_shadow_disagreement_total."""
+    from prometheus_client import REGISTRY  # noqa: PLC0415 — test-local import
+
+    value = REGISTRY.get_sample_value("fraud_engine_shadow_disagreement_total")
+    return float(value) if value is not None else 0.0
+
+
+async def test_shadow_disagreement_counter_increments_on_disagreement(
+    deps_reachable: None,  # noqa: ARG001 — module-scope dep
+    sample_request_payload: dict[str, Any],
+) -> None:
+    """Shadow-block on champion-allow → counter increments by 1.
+
+    The sample transaction's champion score is ~0.0037 → champion
+    decision is 'allow' (at default Settings.decision_threshold=0.5).
+    Patching the shadow's predict_proba to return shadow_score=0.99
+    yields shadow_decision='block' → agree_decision=False → counter
+    increments.
+    """
+    settings = Settings(shadow_enabled=True)
+    app = create_app(settings=settings)
+    async with LifespanManager(app):
+        shadow = app.state.app_state.shadow
+        assert shadow is not None
+
+        import numpy as np  # noqa: PLC0415 — test-only import
+
+        def _stubbed_block(_features: Any) -> Any:
+            # Shape (1, 2) — column 1 is fraud-probability per FraudNet contract.
+            # 0.99 ≥ default decision_threshold (0.5) → shadow_decision="block".
+            return np.array([[0.01, 0.99]])
+
+        shadow._artefacts.model.predict_proba = _stubbed_block  # type: ignore[union-attr]  # noqa: SLF001
+
+        before = _disagreement_counter_value()
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/predict", json=sample_request_payload)
+            assert response.status_code == 200, response.text
+            # Drain pending shadow tasks so the counter has been incremented.
+            await asyncio.gather(*list(shadow._pending_tasks))  # noqa: SLF001 — test-only access
+
+        after = _disagreement_counter_value()
+        assert after - before == pytest.approx(1.0), (
+            f"Counter delta = {after - before}, expected 1.0 (one disagreement). "
+            f"This usually means the champion+shadow decisions actually agreed — "
+            f"verify the champion score and decision_threshold."
+        )
+
+
+async def test_shadow_disagreement_counter_unchanged_on_agreement(
+    deps_reachable: None,  # noqa: ARG001 — module-scope dep
+    sample_request_payload: dict[str, Any],
+) -> None:
+    """Shadow-allow on champion-allow → counter does NOT increment.
+
+    Same sample (champion='allow') but shadow_score=0.01 → shadow='allow'
+    → agree_decision=True → no counter change.
+    """
+    settings = Settings(shadow_enabled=True)
+    app = create_app(settings=settings)
+    async with LifespanManager(app):
+        shadow = app.state.app_state.shadow
+        assert shadow is not None
+
+        import numpy as np  # noqa: PLC0415 — test-only import
+
+        def _stubbed_allow(_features: Any) -> Any:
+            # 0.01 < default decision_threshold (0.5) → shadow_decision="allow".
+            return np.array([[0.99, 0.01]])
+
+        shadow._artefacts.model.predict_proba = _stubbed_allow  # type: ignore[union-attr]  # noqa: SLF001
+
+        before = _disagreement_counter_value()
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/predict", json=sample_request_payload)
+            assert response.status_code == 200, response.text
+            await asyncio.gather(*list(shadow._pending_tasks))  # noqa: SLF001
+
+        after = _disagreement_counter_value()
+        assert after == pytest.approx(before, abs=1e-9), (
+            f"Counter unexpectedly incremented {before} → {after} on agreement; "
+            f"verify the shadow path's `if agree_decision is False:` guard."
+        )

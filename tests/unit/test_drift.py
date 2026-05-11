@@ -397,3 +397,67 @@ class TestPersistenceAndEquivalence:
         recent_pcts = recent_counts / len(recent_arr)
         psi_kernel = _psi_from_pcts(baseline_feature.baseline_pcts, recent_pcts)
         assert psi_kernel == pytest.approx(psi_drift_monitor, abs=1e-12)
+
+
+# ---------------------------------------------------------------------
+# Sprint 6.1.d retrofit — Prometheus Counter behaviour.
+# ---------------------------------------------------------------------
+
+
+class TestDriftAlertsTotalCounter:
+    """`fraud_engine_drift_alerts_total` Counter increments per alert.
+
+    The Counter feeds the `FeatureDrift` Prometheus alert rule (Sprint
+    6.1.d) so an offline drift run is observable on the live scrape.
+    Tests use the **delta pattern** (capture sample value before, fire
+    alert, capture after) to be order-independent against the global
+    REGISTRY singleton — same convention as test_prometheus_metrics.py.
+    """
+
+    @staticmethod
+    def _drift_counter_value() -> float:
+        """Read the current absolute value of fraud_engine_drift_alerts_total."""
+        from prometheus_client import REGISTRY
+
+        value = REGISTRY.get_sample_value("fraud_engine_drift_alerts_total")
+        return float(value) if value is not None else 0.0
+
+    def test_drift_alerts_counter_increments_per_jsonl_line(self, tmp_path: Path) -> None:
+        """Each alert written to drift_alerts.jsonl bumps the Counter by 1."""
+        rng = np.random.default_rng(_RNG_SEED)
+        baseline = rng.normal(loc=0.0, scale=1.0, size=_BASELINE_N)
+        baseline_path = _build_baseline_for({"feature_a": baseline}, tmp_path)
+        # Low threshold so the synthetic shift trips the alert.
+        settings = _make_settings(tmp_path, threshold=0.05)
+        monitor = DriftMonitor(baseline_path=baseline_path, settings=settings)
+
+        recent = pd.DataFrame({"feature_a": rng.normal(loc=1.5, scale=1.0, size=_RECENT_N)})
+
+        before = self._drift_counter_value()
+        n_alerts = monitor.check_and_alert(recent, run_id="counter-test-001")
+        after = self._drift_counter_value()
+
+        assert n_alerts == 1
+        assert after - before == pytest.approx(
+            1.0
+        ), f"Counter delta = {after - before}, expected 1.0 (one JSONL line written)"
+
+    def test_drift_alerts_counter_unchanged_when_no_drift(self, tmp_path: Path) -> None:
+        """No drift → no JSONL writes → Counter stays put."""
+        rng = np.random.default_rng(_RNG_SEED)
+        baseline = rng.normal(loc=0.0, scale=1.0, size=_BASELINE_N)
+        baseline_path = _build_baseline_for({"feature_a": baseline}, tmp_path)
+        # High threshold + identical distributions → no alerts.
+        settings = _make_settings(tmp_path, threshold=0.5)
+        monitor = DriftMonitor(baseline_path=baseline_path, settings=settings)
+
+        recent = pd.DataFrame({"feature_a": rng.normal(loc=0.0, scale=1.0, size=_RECENT_N)})
+
+        before = self._drift_counter_value()
+        n_alerts = monitor.check_and_alert(recent, run_id="counter-test-002")
+        after = self._drift_counter_value()
+
+        assert n_alerts == 0
+        assert after == pytest.approx(
+            before, abs=1e-9
+        ), f"Counter unexpectedly changed: {before} → {after} on no-drift run"

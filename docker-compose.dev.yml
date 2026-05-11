@@ -66,8 +66,22 @@ services:
   prometheus:
     image: prom/prometheus:v3.1.0
     container_name: fraud-prometheus
+    # Sprint 6.1.d: explicit `command:` so we can set 30-day retention
+    # (Prometheus default is 15d) + enable lifecycle endpoint for
+    # `POST /-/reload` (operator can hot-reload alert rules without
+    # restarting the container).
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--web.enable-lifecycle"
     volumes:
       - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Sprint 6.1.d: mount the alert rules file at the path
+      # prometheus.yml's `rule_files:` block expects.
+      - ./configs/alerts/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
       - prometheus_data:/prometheus
     ports:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
@@ -92,11 +106,14 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana_data:/var/lib/grafana
-      # Mount `configs/grafana/` as the datasources provisioning dir
-      # — Grafana auto-picks up `datasources.yml` on first boot.
-      # Sprint 6 will add a sibling `dashboards.yml` under the same
-      # tree without needing a compose edit.
-      - ./configs/grafana:/etc/grafana/provisioning/datasources:ro
+      # Sprint 6.1.d: split the broad `configs/grafana → provisioning/datasources`
+      # mount from Sprint 0 into three narrow mounts — one for the datasource
+      # provisioning config, one for the dashboard provisioning config, and
+      # one for the dashboard JSON files themselves. Grafana scans these
+      # locations on container boot AND on `updateIntervalSeconds` ticks.
+      - ./configs/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./configs/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./configs/grafana/fraud_dashboard.json:/var/lib/grafana/dashboards/fraud_dashboard.json:ro
     ports:
       - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
     depends_on:

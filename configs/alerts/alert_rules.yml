@@ -1,0 +1,102 @@
+# Sprint 6.1.d alert rules for the fraud-detection API.
+#
+# Five named SLO/SLA rules per the spec:
+#   - HighLatency        — /predict p95 above the CLAUDE.md §3 100ms budget.
+#   - BlockRateSpike     — block rate above 4x the 3.5% IEEE-CIS baseline.
+#   - FeatureDrift       — DriftMonitor wrote any drift alert in the last hour.
+#   - ShadowDisagreement — shadow vs champion decisions disagree at >10% rate.
+#   - ApiErrorRate       — 5xx error rate above 1% over 5 minutes.
+#
+# Two of these (FeatureDrift, ShadowDisagreement) are surfaced on the
+# Prometheus scrape via the Sprint 6.1.d retrofit Counters in
+# `src/fraud_engine/monitoring/prometheus_metrics.py` —
+# `fraud_engine_drift_alerts_total` + `fraud_engine_shadow_disagreement_total`.
+#
+# All rules carry `labels:` (severity, team) and `annotations:` (summary,
+# description, runbook_url) for AlertManager routing + on-call paging.
+# AlertManager itself is out of scope for 6.1.d — these rules fire and
+# appear in `localhost:9090/alerts` but don't route anywhere yet (a
+# future Sprint 6.x adds the `alerting:` block + AlertManager service).
+#
+# `runbook_url` annotations point at `docs/RUNBOOK.md#alert-${name}` —
+# the runbook is a Sprint 6.x deliverable per CLAUDE.md §14.
+
+groups:
+  - name: fraud_engine_slos
+    interval: 15s
+    rules:
+
+      - alert: HighLatency
+        expr: histogram_quantile(0.95, sum by (le) (rate(fraud_engine_predict_total_seconds_bucket[5m]))) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+          team: fraud
+          slo: latency_p95
+        annotations:
+          summary: "/predict p95 latency above 100ms budget"
+          description: "p95 = {{ $value | humanizeDuration }} (CLAUDE.md §3 budget = 100ms). Investigate per-stage breakdown via the dashboard's panel 2."
+          runbook_url: "https://github.com/dassus98/fraud-detection-engine/blob/main/docs/RUNBOOK.md#alert-highlatency"
+
+      - alert: BlockRateSpike
+        expr: |
+          (
+            sum(rate(fraud_engine_predictions_total{decision="block"}[5m]))
+            /
+            sum(rate(fraud_engine_predictions_total[5m]))
+          ) > 0.15
+        for: 10m
+        labels:
+          severity: warning
+          team: fraud
+          slo: block_rate
+        annotations:
+          summary: "Block rate above 15% (4x the 3.5% IEEE-CIS baseline)"
+          description: "Block rate = {{ $value | humanizePercentage }} sustained over 10m. Possible causes: model drift, feature pipeline regression, marketing-driven traffic mix shift, or upstream attack. Investigate via dashboard panels 4 (block rate trend) + 5 (score distribution heatmap)."
+          runbook_url: "https://github.com/dassus98/fraud-detection-engine/blob/main/docs/RUNBOOK.md#alert-blockratespike"
+
+      - alert: FeatureDrift
+        expr: increase(fraud_engine_drift_alerts_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: info
+          team: fraud
+          slo: feature_drift
+        annotations:
+          summary: "DriftMonitor detected feature distribution drift in the last hour"
+          description: "{{ $value }} drift alerts written to logs/drift/{run_id}/drift_alerts.jsonl in the last hour. Inspect the JSONL for the per-feature PSI values; PSI > 0.2 indicates significant population shift (industry convention)."
+          runbook_url: "https://github.com/dassus98/fraud-detection-engine/blob/main/docs/RUNBOOK.md#alert-featuredrift"
+
+      - alert: ShadowDisagreement
+        expr: |
+          (
+            sum(rate(fraud_engine_shadow_disagreement_total[15m]))
+            /
+            sum(rate(fraud_engine_shadow_total{event="scored"}[15m]))
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          team: fraud
+          slo: shadow_agreement
+        annotations:
+          summary: "Shadow model disagrees with champion on >10% of decisions"
+          description: "Disagreement rate = {{ $value | humanizePercentage }} sustained over 10m (15m rolling window). The challenger and champion are diverging on the decision boundary; investigate via dashboard panel 7 + the structlog `shadow.scored` events with `agree_decision=False`."
+          runbook_url: "https://github.com/dassus98/fraud-detection-engine/blob/main/docs/RUNBOOK.md#alert-shadowdisagreement"
+
+      - alert: ApiErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status="5xx"}[5m]))
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          team: fraud
+          slo: error_rate
+        annotations:
+          summary: "/predict 5xx error rate above 1%"
+          description: "Error rate = {{ $value | humanizePercentage }} over 5m. The prometheus-fastapi-instrumentator library buckets status codes into 2xx/3xx/4xx/5xx string labels. Inspect uvicorn logs for the actual exception types."
+          runbook_url: "https://github.com/dassus98/fraud-detection-engine/blob/main/docs/RUNBOOK.md#alert-apierrorrate"

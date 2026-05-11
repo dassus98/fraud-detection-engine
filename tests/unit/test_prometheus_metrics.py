@@ -38,6 +38,7 @@ from fraud_engine.monitoring.prometheus_metrics import (
     DEGRADED_MODE_TOTAL,
     DEPENDENCY_LABELS,
     DEPENDENCY_UP,
+    DRIFT_ALERTS_TOTAL,
     FEATURE_FETCH_SECONDS,
     INFERENCE_SECONDS,
     LATENCY_BUCKETS,
@@ -48,6 +49,7 @@ from fraud_engine.monitoring.prometheus_metrics import (
     SCORE_BUCKETS,
     SHADOW_BREAKER_STATE,
     SHADOW_BREAKER_STATE_LABELS,
+    SHADOW_DISAGREEMENT_TOTAL,
     SHADOW_EVENT_LABELS,
     SHADOW_TOTAL,
     SHAP_SECONDS,
@@ -64,16 +66,20 @@ _EXPECTED_METRIC_NAMES: tuple[str, ...] = (
     "fraud_engine_inference_seconds",
     "fraud_engine_shap_seconds",
     "fraud_engine_predict_total_seconds",
-    # New histogram (drift seed).
+    # 6.1.a histogram (drift seed).
     "fraud_engine_prediction_score",
-    # New counters.
+    # 6.1.a counters.
     "fraud_engine_predictions_total",
     "fraud_engine_degraded_mode_total",
     "fraud_engine_shadow_total",
-    # New gauges.
+    # 6.1.a gauges.
     "fraud_engine_dependency_up",
     "fraud_engine_shadow_breaker_state",
     "fraud_engine_model_info",
+    # 6.1.d retrofit counters — surface offline drift + shadow
+    # disagreement so the named alert rules can fire on them.
+    "fraud_engine_drift_alerts_total",
+    "fraud_engine_shadow_disagreement_total",
 )
 
 # A metric labelled with one of these would explode the time-series
@@ -141,6 +147,8 @@ class TestRegistration:
         assert isinstance(PREDICTIONS_TOTAL, Counter)
         assert isinstance(DEGRADED_MODE_TOTAL, Counter)
         assert isinstance(SHADOW_TOTAL, Counter)
+        assert isinstance(DRIFT_ALERTS_TOTAL, Counter)
+        assert isinstance(SHADOW_DISAGREEMENT_TOTAL, Counter)
         # Histograms — distributions.
         assert isinstance(FEATURE_FETCH_SECONDS, Histogram)
         assert isinstance(INFERENCE_SECONDS, Histogram)
