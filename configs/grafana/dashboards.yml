@@ -1,0 +1,34 @@
+# Sprint 6.1.d — Grafana dashboard provisioning config.
+#
+# Tells Grafana to scan /var/lib/grafana/dashboards/ for dashboard
+# JSON files and auto-import them on container boot. The mount that
+# delivers the JSON itself lives in docker-compose.dev.yml +
+# docker-compose.yml (grafana service `volumes:`).
+#
+# `allowUiUpdates: true` lets an operator iterate on the dashboard
+# inside the Grafana UI; changes are persisted to the named volume
+# `grafana_data` but DO NOT write back to the source JSON in the
+# repo. To capture UI-side iteration, the operator exports the
+# dashboard from Grafana's "Share → Export" and replaces the file
+# in this directory.
+#
+# `updateIntervalSeconds: 30` makes Grafana re-read the JSON every
+# 30s, so a `git pull` + container restart isn't required to pick
+# up dashboard JSON changes — useful when iterating on this file
+# from the editor.
+
+apiVersion: 1
+
+providers:
+  - name: 'fraud-engine'
+    orgId: 1
+    folder: ''
+    folderUid: ''
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

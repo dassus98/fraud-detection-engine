@@ -138,6 +138,7 @@ import pandas as pd
 from numpy.typing import NDArray
 
 from fraud_engine.config.settings import Settings, get_settings
+from fraud_engine.monitoring.prometheus_metrics import DRIFT_ALERTS_TOTAL
 from fraud_engine.utils.logging import get_logger, log_call
 
 # ---------------------------------------------------------------------
@@ -692,6 +693,11 @@ class DriftMonitor:
             }
             with target_path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, sort_keys=True) + "\n")
+            # Sprint 6.1.d: surface the alert on the Prometheus scrape
+            # so `FeatureDrift` alert rule can fire on it.  Unlabelled
+            # Counter — bounded cardinality (1 series); per-feature
+            # breakdown stays in the JSONL stream.
+            DRIFT_ALERTS_TOTAL.inc()
             alerts_written += 1
 
         _logger.info(

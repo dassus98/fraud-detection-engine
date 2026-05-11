@@ -1,0 +1,389 @@
+{
+  "uid": "fraud-detection-main",
+  "title": "Fraud Detection — Overview",
+  "description": "Sprint 6.1.d main monitoring dashboard. Seven panels covering latency (SLO), prediction volume + decision mix, score distribution (output drift), dependency health, model identity, and shadow + drift activity. Backed by metrics from src/fraud_engine/monitoring/prometheus_metrics.py (Sprints 6.1.a + 6.1.d retrofit). Alert rules live in configs/alerts/alert_rules.yml.",
+  "tags": ["fraud", "production", "sprint-6"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "15s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"]
+  },
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "API latency — p50 / p95 / p99 (5m rolling)",
+      "description": "End-to-end /predict latency quantiles. Horizontal line at 0.100 marks the CLAUDE.md §3 SLO budget that the HighLatency alert fires on.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(fraud_engine_predict_total_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "interval": ""
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(fraud_engine_predict_total_seconds_bucket[5m])))",
+          "legendFormat": "p95 (SLO)",
+          "interval": ""
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(fraud_engine_predict_total_seconds_bucket[5m])))",
+          "legendFormat": "p99",
+          "interval": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "red", "value": 0.1}
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "thresholdsStyle": {"mode": "line"}
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    },
+    {
+      "id": 2,
+      "title": "Per-stage latency p95 (5m rolling)",
+      "description": "Diagnoses which stage is slow when panel 1 trips. feature_fetch covers Tier-1 inline + Redis MGET + Postgres probe; inference is LightGBM predict_proba + isotonic calibration; shap is SHAP top-k + reason mapping.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(fraud_engine_feature_fetch_seconds_bucket[5m])))",
+          "legendFormat": "feature_fetch"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(fraud_engine_inference_seconds_bucket[5m])))",
+          "legendFormat": "inference"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(fraud_engine_shap_seconds_bucket[5m])))",
+          "legendFormat": "shap"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 3,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "stacking": {"mode": "normal", "group": "A"}
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    },
+    {
+      "id": 3,
+      "title": "Prediction volume + decision mix (1m rolling)",
+      "description": "Throughput at a glance + the block/allow ratio. Stacked time series — each band's height is the per-decision rate.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (decision) (rate(fraud_engine_predictions_total[1m]))",
+          "legendFormat": "{{decision}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 50,
+            "stacking": {"mode": "normal", "group": "A"}
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "block"},
+            "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]
+          },
+          {
+            "matcher": {"id": "byName", "options": "allow"},
+            "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}]
+          }
+        ]
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "sum"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    },
+    {
+      "id": 4,
+      "title": "Block rate (%) — 5m rolling",
+      "description": "The signal BlockRateSpike alert fires on. Horizontal line at 15% (4× the 3.5% IEEE-CIS baseline fraud rate). A spike sustained over 10m trips the alert.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(fraud_engine_predictions_total{decision=\"block\"}[5m])) / sum(rate(fraud_engine_predictions_total[5m]))",
+          "legendFormat": "block rate"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "red", "value": 0.15}
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "thresholdsStyle": {"mode": "line"}
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "single"}
+      }
+    },
+    {
+      "id": 5,
+      "title": "Score distribution (heatmap)",
+      "description": "Output drift surface: per-bucket count of calibrated probabilities returned to clients. The 0.08 bucket boundary is the post-Sprint-4.4 cost-optimal decision threshold; mass shifting across it indicates calibration drift.",
+      "type": "heatmap",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (le) (rate(fraud_engine_prediction_score_bucket[5m]))",
+          "format": "heatmap",
+          "legendFormat": "{{le}}"
+        }
+      ],
+      "options": {
+        "calculate": false,
+        "yAxis": {
+          "axisLabel": "score",
+          "axisPlacement": "left",
+          "decimals": 2,
+          "unit": "short"
+        },
+        "color": {
+          "mode": "scheme",
+          "scheme": "Spectral",
+          "steps": 64,
+          "reverse": true,
+          "exponent": 0.5
+        },
+        "tooltip": {"show": true, "yHistogram": false},
+        "legend": {"show": true},
+        "exemplars": {"color": "rgba(255,0,255,0.7)"}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "scaleDistribution": {"type": "linear"},
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false}
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "title": "Dependency health + model version",
+      "description": "Stat panel — 1=up, 0=down for redis/postgres/model. Model version label shows the current SHA-256 hex of the loaded LightGBM artefact (mid-session reload via InferenceService.reload swaps it atomically).",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "fraud_engine_dependency_up",
+          "legendFormat": "{{component}}",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "fraud_engine_model_info",
+          "legendFormat": "model {{model_version}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "green", "value": 1}
+            ]
+          },
+          "mappings": [
+            {"options": {"0": {"text": "DOWN", "color": "red"}}, "type": "value"},
+            {"options": {"1": {"text": "UP", "color": "green"}}, "type": "value"}
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""},
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 7,
+      "title": "Shadow + drift activity",
+      "description": "Multi-axis: shadow events per second (scored / failed / breaker_open_skip) + shadow-vs-champion disagreement rate per second + drift alerts per hour. Backed by the Sprint 6.1.d retrofit Counters in src/fraud_engine/monitoring/prometheus_metrics.py.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 24},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (event) (rate(fraud_engine_shadow_total[5m]))",
+          "legendFormat": "shadow {{event}}/s"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(fraud_engine_shadow_disagreement_total[5m])",
+          "legendFormat": "shadow disagreements/s"
+        },
+        {
+          "refId": "C",
+          "expr": "rate(fraud_engine_drift_alerts_total[1h]) * 3600",
+          "legendFormat": "drift alerts/h"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "shadow scored/s"},
+            "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}]
+          },
+          {
+            "matcher": {"id": "byName", "options": "shadow failed/s"},
+            "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]
+          },
+          {
+            "matcher": {"id": "byName", "options": "shadow breaker_open_skip/s"},
+            "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "orange"}}]
+          },
+          {
+            "matcher": {"id": "byName", "options": "shadow disagreements/s"},
+            "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "purple"}}]
+          },
+          {
+            "matcher": {"id": "byName", "options": "drift alerts/h"},
+            "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "blue"}}]
+          }
+        ]
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      }
+    }
+  ]
+}

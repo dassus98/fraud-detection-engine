@@ -123,7 +123,11 @@ from fraud_engine.api.circuit_breaker import CircuitBreaker
 from fraud_engine.api.schemas import DecisionLiteral
 from fraud_engine.config.settings import Settings, get_settings
 from fraud_engine.models.neural_model import FraudNetModel
-from fraud_engine.monitoring import SHADOW_TOTAL, set_shadow_breaker_state
+from fraud_engine.monitoring import (
+    SHADOW_DISAGREEMENT_TOTAL,
+    SHADOW_TOTAL,
+    set_shadow_breaker_state,
+)
 from fraud_engine.utils.logging import get_logger, log_call
 
 # ---------------------------------------------------------------------
@@ -453,6 +457,14 @@ class ShadowService:
                     "block" if shadow_score >= self._settings.decision_threshold else "allow"
                 )
                 agree_decision = shadow_decision == champion_decision
+                # Sprint 6.1.d: surface disagreements on the Prometheus
+                # scrape so `ShadowDisagreement` alert rule fires when
+                # the rolling disagreement rate crosses the threshold.
+                # Counter is unlabelled (1 series) and increments only
+                # on actual disagreement (not on agreement, not when
+                # champion_decision is None).
+                if agree_decision is False:
+                    SHADOW_DISAGREEMENT_TOTAL.inc()
 
             _logger.info(
                 "shadow.scored",

@@ -1,32 +1,65 @@
-# Prometheus scrape config for the dev stack — skeleton.
+# Prometheus scrape config for the fraud-detection stack.
 #
-# Sprint 0 (this file): bare self-scrape so the container boots and the
-#   `/targets` page renders without errors.
-# Sprint 5: the fraud-api job below starts returning UP once the FastAPI
-#   /metrics endpoint is served on the host.
-# Sprint 6: additional scrape jobs (redis_exporter, postgres_exporter,
-#   node_exporter) will be added here as the monitoring surface grows.
+# Sprint 0: bare self-scrape so the container boots and `/targets` renders.
+# Sprint 5.1.f: fraud-api scrape job started returning UP once the FastAPI
+#   /metrics endpoint shipped on the host.
+# Sprint 6.1.d (this version): adds rule_files (5 named alert rules from
+#   configs/alerts/alert_rules.yml) + dual-stack fraud-api scrape (one
+#   target for the dev stack via host.docker.internal, one for the
+#   prod-like compose stack via the in-network service name).
 #
-# One scrape every 15s — cheap on a laptop, fine-grained enough for the
-# fraud-API latency dashboards Sprint 6 will plot.
+# Retention is set to 30 days per the spec — but that's a binary flag,
+# NOT a config-file option. See the `command:` block in
+# docker-compose.dev.yml + docker-compose.yml prometheus services for
+# `--storage.tsdb.retention.time=30d`.
+#
+# AlertManager wiring (the `alerting:` block below) is deferred to a
+# future Sprint 6.x — for now the rules fire and surface in the
+# Prometheus `/alerts` UI but don't route to PagerDuty/Slack.
 
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+  external_labels:
+    monitor: fraud-engine
+    env: dev
+
+# Sprint 6.1.d: load alert rules from the mounted alert_rules.yml.
+# The file is mounted at /etc/prometheus/alert_rules.yml by both
+# docker-compose.dev.yml and docker-compose.yml.
+rule_files:
+  - "/etc/prometheus/alert_rules.yml"
 
 scrape_configs:
-  # Prometheus self-scrape. Makes `up{job="prometheus"}` available so a
-  # Sprint 6 alerting rule can catch a dead Prometheus.
+  # Prometheus self-scrape. Makes `up{job="prometheus"}` available so
+  # an alert rule can catch a dead Prometheus.
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
 
-  # Sprint 5 exposes /metrics on the host API at $API_PORT (default 8000).
-  # The target reads "DOWN" on Prometheus's /targets page until the API
-  # boots — intentional and diagnostic during dev. `host.docker.internal`
-  # resolves via the `extra_hosts: host-gateway` mapping in
-  # docker-compose.dev.yml (works on Docker Desktop + native Linux).
+  # Fraud-API metrics endpoint.
+  #
+  # Two static targets are listed so the same prometheus.yml works
+  # for both compose stacks:
+  #
+  #   - host.docker.internal:8000 — `docker-compose.dev.yml` runs the
+  #     API on the host (uvicorn outside the compose network). Resolves
+  #     via the `extra_hosts: host-gateway` mapping in the dev compose.
+  #
+  #   - fraud-api:8000 — `docker-compose.yml` runs the API as a
+  #     containerised service on the compose network; standard
+  #     service-name DNS resolution applies.
+  #
+  # An operator running ONE stack sees one UP target + one DOWN target
+  # on `/targets` — intentional and harmless. The alert rules aggregate
+  # via `sum`/`rate` across instances so a steady-state DOWN target
+  # has no effect on the alert math.
   - job_name: fraud-api
+    metrics_path: /metrics
     static_configs:
       - targets: ["host.docker.internal:8000"]
-    metrics_path: /metrics
+        labels:
+          stack: dev
+      - targets: ["fraud-api:8000"]
+        labels:
+          stack: prod
